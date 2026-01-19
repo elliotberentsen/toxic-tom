@@ -9,6 +9,12 @@ import SwiftUI
 
 @main
 struct Toxic_TomApp: App {
+    
+    init() {
+        // Authenticate with Game Center when app launches
+        GameCenterManager.shared.authenticate()
+    }
+    
     var body: some Scene {
         WindowGroup {
             ContentView()

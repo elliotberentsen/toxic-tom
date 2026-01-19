@@ -7,51 +7,6 @@
 
 import SwiftUI
 
-// MARK: - Theme Colors (Your Palette)
-
-struct AppColors {
-    // Background - soft antique paper (not too saturated)
-    static let parchment = Color(hex: "f2ebe0")           // Light antique paper - main background
-    
-    // Primary palette from your selection
-    static let warmGold = Color(hex: "e4be83")            // Accent, decorative elements
-    static let burntOrange = Color(hex: "c36439")         // Primary buttons
-    static let terracotta = Color(hex: "c96b40")          // Secondary/hover
-    static let deepBlue = Color(hex: "3959a2")            // Accent/links
-    static let oliveGreen = Color(hex: "97b048")          // Success states
-    
-    // Derived colors
-    static let inkDark = Color(hex: "2a1f14")             // Dark text
-    static let inkLight = Color(hex: "5c4a3a")            // Light text
-    static let parchmentLight = Color(hex: "faf7f2")      // Lighter areas
-    static let parchmentDark = Color(hex: "e5dcd0")       // Subtle borders/dividers
-}
-
-// Helper extension for hex colors
-extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 6:
-            (a, r, g, b) = (255, (int >> 16) & 0xFF, (int >> 8) & 0xFF, int & 0xFF)
-        case 8:
-            (a, r, g, b) = ((int >> 24) & 0xFF, (int >> 16) & 0xFF, (int >> 8) & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (255, 0, 0, 0)
-        }
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue: Double(b) / 255,
-            opacity: Double(a) / 255
-        )
-    }
-}
-
 // MARK: - Character Model
 
 struct GameCharacter: Identifiable, Equatable {
@@ -70,8 +25,12 @@ struct GameCharacter: Identifiable, Equatable {
 enum AppView {
     case home
     case characterSelect
+    case localGame        // New local/hotseat game flow
+    case gameSetup
     case rules
     case diceSimulator
+    case cardFlipTest
+    case settings
 }
 
 // MARK: - Content View
@@ -81,279 +40,318 @@ struct ContentView: View {
     @State private var selectedCharacter: GameCharacter? = nil
     @State private var diceResult: Int? = nil
     @State private var showDiceResult = false
+    @State private var hasStartedMusic = false
     
     let characters: [GameCharacter] = [
-        GameCharacter(name: "The Monk", cardImage: "man-60", description: "A humble servant of faith"),
-        GameCharacter(name: "The Maiden", cardImage: "kvinna-30", description: "A woman of mystery")
+        GameCharacter(name: "Woman 30", cardImage: "kvinna-30", description: ""),
+        GameCharacter(name: "Woman 45", cardImage: "kvinna-45", description: ""),
+        GameCharacter(name: "Woman 60", cardImage: "kvinna-ansikte-60", description: ""),
+        GameCharacter(name: "Man 60", cardImage: "man-60-ansikte", description: "")
     ]
     
     var body: some View {
         ZStack {
-            // Background
-            AppColors.parchment
-                .ignoresSafeArea()
-            
             switch currentView {
             case .home:
                 homeView
             case .characterSelect:
                 characterSelectView
+            case .localGame:
+                LocalGameView(onExit: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        GameManager.shared.resetAll()
+                        currentView = .home
+                    }
+                })
+            case .gameSetup:
+                GameSetupView(showGame: Binding(
+                    get: { currentView == .gameSetup },
+                    set: { if !$0 { currentView = .home } }
+                ))
             case .rules:
                 rulesView
             case .diceSimulator:
                 diceSimulatorView
+            case .cardFlipTest:
+                cardFlipTestView
+            case .settings:
+                SettingsView(onBack: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentView = .home
+                    }
+                })
+            }
+        }
+        .texturedBackground()
+        .onAppear {
+            // Start background music when app launches (only once)
+            if !hasStartedMusic {
+                hasStartedMusic = true
+                SoundManager.shared.playMusic()
             }
         }
     }
     
     // MARK: - Home View
     
+    @ObservedObject private var gameCenterManager = GameCenterManager.shared
+    
     private var homeView: some View {
-        ZStack {
-            // Subtle texture overlay
-            VStack(spacing: 0) {
-                ForEach(0..<20) { _ in
-                    HStack(spacing: 0) {
-                        ForEach(0..<10) { _ in
-                            Rectangle()
-                                .fill(AppColors.inkDark.opacity(Double.random(in: 0.01...0.03)))
-                                .frame(width: 40, height: 40)
-                        }
+        VStack(spacing: 0) {
+            // Top bar with Game Center status and settings
+            HStack {
+                // Game Center status
+                Button(action: {
+                    SoundManager.shared.playClick()
+                    if gameCenterManager.isAuthenticated {
+                        gameCenterManager.showDashboard()
+                    } else {
+                        gameCenterManager.authenticate()
                     }
-                }
-            }
-            .ignoresSafeArea()
-            
-            VStack(spacing: 0) {
-                Spacer()
-                    .frame(height: 100)
-                
-                // Title Section - More ornate
-                VStack(spacing: 16) {
-                    // Decorative top flourish
-                    HStack(spacing: 8) {
-                        OrnamentLine()
-                        OrnamentDiamond()
-                        OrnamentLine()
-                    }
-                    .frame(width: 200)
-                    
-                    // Game Title - Larger, more dramatic
-                    VStack(spacing: 4) {
-                        Text("SMITTOBÄRAREN")
-                            .font(.custom("Georgia-Bold", size: 34))
-                            .tracking(3)
-                            .foregroundColor(AppColors.inkDark)
-                        
-                        Text("— The Carrier —")
-                            .font(.custom("Georgia-Italic", size: 15))
-                            .foregroundColor(AppColors.inkLight)
-                    }
-                    
-                    // Decorative bottom flourish
-                    HStack(spacing: 8) {
-                        OrnamentLine()
-                        OrnamentDiamond()
-                        OrnamentLine()
-                    }
-                    .frame(width: 200)
-                }
-                
-                Spacer()
-                
-                // Center emblem area - placeholder for your logo
-                ZStack {
-                    // Outer decorative ring
-                    Circle()
-                        .stroke(AppColors.inkLight.opacity(0.2), lineWidth: 2)
-                        .frame(width: 160, height: 160)
-                    
-                    // Inner decorative ring with dashes
-                    Circle()
-                        .stroke(AppColors.inkLight.opacity(0.15), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                        .frame(width: 130, height: 130)
-                    
-                    // Center cross emblem
-                    VStack(spacing: 4) {
-                        Image(systemName: "cross.fill")
-                            .font(.system(size: 28, weight: .light))
-                            .foregroundColor(AppColors.inkLight.opacity(0.4))
-                        
-                        Text("ANNO")
-                            .font(.custom("Georgia", size: 10))
-                            .tracking(2)
-                            .foregroundColor(AppColors.inkLight.opacity(0.3))
-                        Text("MMXXVI")
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: gameCenterManager.isAuthenticated ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
+                            .font(.system(size: 16))
+                        Text(gameCenterManager.isAuthenticated ? gameCenterManager.playerName : "Sign In")
                             .font(.custom("Georgia", size: 12))
-                            .tracking(1)
-                            .foregroundColor(AppColors.inkLight.opacity(0.3))
                     }
+                    .foregroundColor(gameCenterManager.isAuthenticated ? AppColors.oliveGreen : AppColors.coralRed)
                 }
                 
                 Spacer()
                 
-                // Buttons Section - Medieval styled
-                VStack(spacing: 14) {
-                    // PRIMARY: Start Game - Banner style
-                    Button(action: { 
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            currentView = .characterSelect
-                        }
-                    }) {
-                        MedievalButton(
-                            text: "BEGIN JOURNEY",
-                            style: .primary
-                        )
+                Button(action: {
+                    SoundManager.shared.playClick()
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentView = .settings
                     }
-                    
-                    // SECONDARY: How to Play
-                    Button(action: { 
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            currentView = .rules
-                        }
-                    }) {
-                        MedievalButton(
-                            text: "Rules of Play",
-                            style: .secondary
-                        )
-                    }
-                    
-                    // TERTIARY: Dice Simulator
-                    Button(action: { 
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            currentView = .diceSimulator
-                        }
-                    }) {
-                        MedievalButton(
-                            text: "Test the Dice",
-                            style: .tertiary
-                        )
-                    }
+                }) {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(AppColors.inkMedium)
                 }
-                .padding(.horizontal, 50)
-                
-                Spacer()
-                    .frame(height: 30)
-                
-                // Version - styled
-                HStack(spacing: 6) {
-                    Rectangle()
-                        .fill(AppColors.inkLight.opacity(0.2))
-                        .frame(width: 20, height: 1)
-                    Text("Version 0.1")
-                        .font(.custom("Georgia", size: 10))
-                        .foregroundColor(AppColors.inkLight.opacity(0.4))
-                    Rectangle()
-                        .fill(AppColors.inkLight.opacity(0.2))
-                        .frame(width: 20, height: 1)
-                }
-                .padding(.bottom, 30)
             }
+            .padding(.horizontal, 24)
+            .padding(.top, 50)
+            
+            Spacer()
+                .frame(height: 40)
+            
+            // Title Section
+            VStack(spacing: 16) {
+                // Decorative top flourish
+                OrnamentDivider(width: 180, color: AppColors.warmBrown)
+                
+                // Game Title
+                VStack(spacing: 6) {
+                    Text("SMITTOBÄRAREN")
+                        .font(AppFonts.displayLarge())
+                        .tracking(3)
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    Text("— The Carrier —")
+                        .font(AppFonts.bodyItalic())
+                        .foregroundColor(AppColors.warmBrown)
+                }
+                
+                // Decorative bottom flourish
+                OrnamentDivider(width: 180, color: AppColors.warmBrown)
+            }
+            
+            Spacer()
+            
+            // Center emblem area
+            ZStack {
+                // Outer decorative ring
+                Circle()
+                    .stroke(AppColors.warmBrown.opacity(0.3), lineWidth: 1.5)
+                    .frame(width: 140, height: 140)
+                
+                // Inner decorative ring with dashes
+                Circle()
+                    .stroke(AppColors.warmBrown.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .frame(width: 110, height: 110)
+                
+                // Center cross emblem
+                VStack(spacing: 4) {
+                    Image(systemName: "cross.fill")
+                        .font(.system(size: 24, weight: .light))
+                        .foregroundColor(AppColors.warmBrown.opacity(0.5))
+                    
+                    Text("ANNO")
+                        .font(.custom("Georgia", size: 9))
+                        .tracking(2)
+                        .foregroundColor(AppColors.warmBrown.opacity(0.4))
+                    Text("MMXXVI")
+                        .font(.custom("Georgia", size: 11))
+                        .tracking(1)
+                        .foregroundColor(AppColors.warmBrown.opacity(0.4))
+                }
+            }
+            
+            Spacer()
+                
+            // Buttons Section
+            VStack(spacing: AppSpacing.md) {
+                // PRIMARY: Start Game (Local/Hotseat mode)
+                Button(action: { 
+                    SoundManager.shared.playClick()
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        GameManager.shared.resetAll()
+                        currentView = .localGame
+                    }
+                }) {
+                    Text("BEGIN JOURNEY")
+                }
+                .buttonStyle(.primary)
+                
+                // Card Flip Test
+                Button(action: { 
+                    SoundManager.shared.playClick()
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentView = .cardFlipTest
+                    }
+                }) {
+                    Text("Test Card Flip")
+                }
+                .buttonStyle(.secondary)
+                
+                // SECONDARY: How to Play
+                Button(action: { 
+                    SoundManager.shared.playClick()
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentView = .rules
+                    }
+                }) {
+                    Text("Rules of Play")
+                }
+                .buttonStyle(.tertiary)
+                
+                // TERTIARY: Dice Simulator
+                Button(action: { 
+                    SoundManager.shared.playClick()
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentView = .diceSimulator
+                    }
+                }) {
+                    Text("Test the Dice")
+                }
+                .buttonStyle(.tertiary)
+            }
+            .padding(.horizontal, 40)
+                
+            Spacer()
+                .frame(height: 30)
+            
+            // Version - styled
+            Text("Version 0.1")
+                .font(AppFonts.caption())
+                .foregroundColor(AppColors.inkMedium.opacity(0.5))
+            .padding(.bottom, 30)
         }
     }
     
     // MARK: - Character Select View
     
     private var characterSelectView: some View {
-        VStack(spacing: 0) {
-            // Header with back button
-            HStack {
-                Button(action: { 
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        currentView = .home
-                    }
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.left")
-                            .font(.system(size: 12))
-                        Text("Return")
-                            .font(.custom("Georgia", size: 14))
-                    }
-                    .foregroundColor(AppColors.inkLight)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 60)
-            
-            // Title with ornaments
-            VStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    OrnamentLine()
-                    OrnamentDiamond()
-                    OrnamentLine()
-                }
-                .frame(width: 160)
-                
-                Text("Choose Thy Character")
-                    .font(.custom("Georgia-Bold", size: 26))
-                    .tracking(1)
-                    .foregroundColor(AppColors.inkDark)
-                
-                HStack(spacing: 8) {
-                    OrnamentLine()
-                    OrnamentDiamond()
-                    OrnamentLine()
-                }
-                .frame(width: 160)
-            }
-            .padding(.top, 20)
-            .padding(.bottom, 30)
-            
-            // Character Cards
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 20) {
-                    ForEach(characters) { character in
-                        CharacterCard(
-                            character: character,
-                            isSelected: selectedCharacter == character
-                        )
-                        .onTapGesture {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
-                                selectedCharacter = selectedCharacter == character ? nil : character
-                            }
+        ZStack {
+            // Subtle texture overlay for aged feel
+            VStack(spacing: 0) {
+                ForEach(0..<25, id: \.self) { _ in
+                    HStack(spacing: 0) {
+                        ForEach(0..<12, id: \.self) { _ in
+                            Rectangle()
+                                .fill(AppColors.inkDark.opacity(Double.random(in: 0.01...0.04)))
+                                .frame(width: 36, height: 36)
                         }
                     }
                 }
-                .padding(.horizontal, 30)
-                .padding(.vertical, 10)
             }
+            .ignoresSafeArea()
             
-            // Selected info
-            VStack(spacing: 8) {
-                if let selected = selectedCharacter {
-                    Text(selected.name.uppercased())
-                        .font(.system(size: 20, weight: .bold, design: .serif))
+            // Main content
+            VStack(spacing: 0) {
+                // Header with back button
+                HStack {
+                    Button(action: { 
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            currentView = .home
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.left")
+                                .font(.system(size: 12))
+                            Text("Return")
+                                .font(.custom("Georgia", size: 14))
+                        }
+                        .foregroundColor(AppColors.inkLight)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 60)
+                
+                // Title with ornaments
+                VStack(spacing: 12) {
+                    HStack(spacing: 8) {
+                        OrnamentLine()
+                        OrnamentDiamond()
+                        OrnamentLine()
+                    }
+                    .frame(width: 160)
+                    
+                    Text("Choose Thy Character")
+                        .font(.custom("Georgia-Bold", size: 26))
+                        .tracking(1)
                         .foregroundColor(AppColors.inkDark)
                     
-                    Text(selected.description)
-                        .font(.system(size: 14, weight: .regular, design: .serif))
-                        .foregroundColor(AppColors.inkLight)
-                        .italic()
-                } else {
-                    Text("Tap a character to select")
-                        .font(.system(size: 14))
-                        .foregroundColor(AppColors.inkLight.opacity(0.6))
+                    HStack(spacing: 8) {
+                        OrnamentLine()
+                        OrnamentDiamond()
+                        OrnamentLine()
+                    }
+                    .frame(width: 160)
+                }
+                .padding(.top, 20)
+                .padding(.bottom, 20)
+                
+                // Character Cards - 2 column grid
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVGrid(columns: [
+                        GridItem(.flexible(), spacing: 2),
+                        GridItem(.flexible(), spacing: 2)
+                    ], spacing: 2) {
+                        ForEach(characters) { character in
+                            CharacterCard(
+                                character: character,
+                                isSelected: false
+                            )
+                            .onTapGesture {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                    selectedCharacter = character
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                    .padding(.bottom, 20)
                 }
             }
-            .frame(height: 60)
-            .padding(.top, 24)
             
-            Spacer()
-            
-            // Confirm button
-            if selectedCharacter != nil {
-                Button(action: {
-                    // TODO: Start game with selected character
-                }) {
-                    MedievalButton(text: "Confirm Selection", style: .primary)
-                }
-                .frame(width: 220)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                .padding(.bottom, 50)
-            } else {
-                Spacer()
-                    .frame(height: 100)
+            // Confirmation overlay
+            if let selected = selectedCharacter {
+                CharacterConfirmationOverlay(
+                    character: selected,
+                    onConfirm: {
+                        // TODO: Start game with selected character
+                    },
+                    onClose: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            selectedCharacter = nil
+                        }
+                    }
+                )
+                .transition(.opacity)
             }
         }
     }
@@ -365,6 +363,7 @@ struct ContentView: View {
             // Header
             HStack {
                 Button(action: { 
+                    SoundManager.shared.playClick()
                     withAnimation(.easeInOut(duration: 0.3)) {
                         currentView = .home
                     }
@@ -375,7 +374,7 @@ struct ContentView: View {
                         Text("Return")
                             .font(.custom("Georgia", size: 14))
                     }
-                    .foregroundColor(AppColors.inkLight)
+                    .foregroundColor(AppColors.inkMedium)
                 }
                 Spacer()
             }
@@ -523,6 +522,18 @@ struct ContentView: View {
         }
     }
     
+    // MARK: - Card Flip Test View
+    
+    private var cardFlipTestView: some View {
+        CardFlipDemoView(
+            onBack: {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    currentView = .home
+                }
+            }
+        )
+    }
+    
     // MARK: - Helpers
     
     private func resultLabel(for value: Int) -> String {
@@ -548,42 +559,386 @@ struct CharacterCard: View {
     let character: GameCharacter
     let isSelected: Bool
     
-    private let cardWidth: CGFloat = 140
-    private var cardHeight: CGFloat { cardWidth * 1.5 }
+    var body: some View {
+        Image(character.cardImage)
+            .resizable()
+            .aspectRatio(2/3, contentMode: .fit)
+            .shadow(color: Color.black.opacity(0.15), radius: 4, y: 2)
+    }
+}
+
+// MARK: - Character Confirmation Overlay
+
+struct CharacterConfirmationOverlay: View {
+    let character: GameCharacter
+    let onConfirm: () -> Void
+    let onClose: () -> Void
+    
+    @State private var cardAppeared = false
+    @State private var contentAppeared = false
     
     var body: some View {
         ZStack {
-            Image(character.cardImage)
-                .resizable()
-                .aspectRatio(2/3, contentMode: .fill)
-                .frame(width: cardWidth, height: cardHeight)
+            // Parchment background
+            AppColors.parchment
+                .ignoresSafeArea()
             
-            if isSelected {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(AppColors.burntOrange, lineWidth: 4)
-                    .frame(width: cardWidth, height: cardHeight)
-                
-                VStack {
-                    HStack {
-                        Spacer()
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundColor(AppColors.burntOrange)
-                            .background(Circle().fill(.white).frame(width: 20, height: 20))
-                            .offset(x: 8, y: -8)
+            // Subtle texture
+            VStack(spacing: 0) {
+                ForEach(0..<25, id: \.self) { _ in
+                    HStack(spacing: 0) {
+                        ForEach(0..<12, id: \.self) { _ in
+                            Rectangle()
+                                .fill(AppColors.inkDark.opacity(Double.random(in: 0.01...0.04)))
+                                .frame(width: 36, height: 36)
+                        }
+                    }
+                }
+            }
+            .ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                // Back option
+                HStack {
+                    Button(action: onClose) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 12))
+                            Text("Choose Another")
+                                .font(.custom("Georgia", size: 14))
+                        }
+                        .foregroundColor(AppColors.inkLight)
                     }
                     Spacer()
                 }
-                .frame(width: cardWidth, height: cardHeight)
+                .padding(.horizontal, 24)
+                .padding(.top, 60)
+                .opacity(contentAppeared ? 1 : 0)
+                
+                Spacer()
+                
+                // Title with ornaments
+                VStack(spacing: 12) {
+                    HStack(spacing: 8) {
+                        OrnamentLine()
+                        OrnamentDiamond()
+                        OrnamentLine()
+                    }
+                    .frame(width: 160)
+                    
+                    Text("THY CHAMPION")
+                        .font(.custom("Georgia-Bold", size: 14))
+                        .tracking(4)
+                        .foregroundColor(AppColors.inkLight)
+                }
+                .opacity(contentAppeared ? 1 : 0)
+                .offset(y: contentAppeared ? 0 : 10)
+                
+                Spacer()
+                    .frame(height: 24)
+                
+                // The card - animated entrance
+                Image(character.cardImage)
+                    .resizable()
+                    .aspectRatio(2/3, contentMode: .fit)
+                    .frame(maxWidth: 240)
+                    .shadow(color: Color.black.opacity(0.25), radius: 16, y: 8)
+                    .scaleEffect(cardAppeared ? 1 : 0.85)
+                    .opacity(cardAppeared ? 1 : 0)
+                
+                Spacer()
+                
+                // Continue button
+                Button(action: onConfirm) {
+                    Text("CONTINUE")
+                        .font(.custom("Georgia-Bold", size: 16))
+                        .tracking(3)
+                        .foregroundColor(AppColors.parchment)
+                        .frame(width: 200, height: 52)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(AppColors.burntOrange)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 3)
+                                .stroke(AppColors.warmGold.opacity(0.4), lineWidth: 1)
+                                .padding(3)
+                        )
+                }
+                .shadow(color: AppColors.burntOrange.opacity(0.4), radius: 12, y: 4)
+                .opacity(contentAppeared ? 1 : 0)
+                .offset(y: contentAppeared ? 0 : 20)
+                
+                Spacer()
+                    .frame(height: 60)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .shadow(
-            color: isSelected ? AppColors.burntOrange.opacity(0.3) : Color.black.opacity(0.15),
-            radius: isSelected ? 12 : 4,
-            y: isSelected ? 0 : 2
-        )
-        .scaleEffect(isSelected ? 1.08 : 1.0)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.4)) {
+                cardAppeared = true
+            }
+            withAnimation(.easeOut(duration: 0.5).delay(0.2)) {
+                contentAppeared = true
+            }
+        }
+    }
+}
+
+// MARK: - Card Flip Demo View
+
+struct CardFlipDemoView: View {
+    let onBack: () -> Void
+    
+    @State private var isFlipped = false
+    @State private var showButton = false
+    
+    // Card takes up most of screen - using exact image ratio (1136:1962)
+    private let cardWidth: CGFloat = 280
+    private var cardHeight: CGFloat { cardWidth * (1962.0 / 1136.0) }
+    
+    // Test with "frisk" (healthy) role
+    private let testRole: PlayerRole = .frisk
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Back button
+            HStack {
+                BackButton(title: "Return", action: onBack)
+                Spacer()
+                
+                // Reset button
+                if isFlipped {
+                    Button(action: {
+                        SoundManager.shared.playClick()
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            isFlipped = false
+                            showButton = false
+                        }
+                    }) {
+                        Text("Reset")
+                            .font(AppFonts.bodyMedium())
+                            .foregroundColor(AppColors.coralRed)
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 60)
+            
+            Spacer()
+            
+            // Title
+            if !isFlipped {
+                VStack(spacing: 12) {
+                    OrnamentDivider(width: 180, color: AppColors.warmBrown)
+                    
+                    Text("Tap to Reveal Thy Fate")
+                        .font(AppFonts.headingLarge())
+                        .tracking(1)
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    OrnamentDivider(width: 180, color: AppColors.warmBrown)
+                }
+                .transition(.opacity)
+            }
+            
+            Spacer()
+                .frame(height: 30)
+                
+                // Card deck and flippable card
+                ZStack {
+                    // Deck underneath (stacked cards)
+                    DemoCardDeck(cardWidth: cardWidth, cardHeight: cardHeight, cardCount: 5)
+                        .offset(y: 16)
+                    
+                    // Flippable top card
+                    DemoFlippableCard(
+                        role: testRole,
+                        cardWidth: cardWidth,
+                        cardHeight: cardHeight,
+                        isFlipped: $isFlipped
+                    )
+                    .onTapGesture {
+                        if !isFlipped {
+                            // Play card flip sound
+                            SoundManager.shared.playCardFlip()
+                            
+                            withAnimation(.easeInOut(duration: 0.6)) {
+                                isFlipped = true
+                            }
+                            // Show button after flip
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                                withAnimation(.easeOut(duration: 0.3)) {
+                                    showButton = true
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(width: cardWidth, height: cardHeight + 20)
+                
+                Spacer()
+                
+            // Continue button (appears after flip)
+            if showButton {
+                Button(action: {
+                    SoundManager.shared.playClick()
+                    // Would continue to next player or game phase
+                    print("Continue tapped")
+                }) {
+                    Text("I UNDERSTAND")
+                }
+                .buttonStyle(.primary)
+                .frame(width: 220)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            
+            Spacer()
+                .frame(height: 40)
+        }
+    }
+}
+
+// MARK: - Demo Card Deck
+
+struct DemoCardDeck: View {
+    let cardWidth: CGFloat
+    let cardHeight: CGFloat
+    let cardCount: Int
+    
+    var body: some View {
+        ZStack {
+            ForEach(0..<cardCount, id: \.self) { index in
+                DemoCardBack(width: cardWidth, height: cardHeight)
+                    .offset(y: CGFloat(cardCount - 1 - index) * 3)
+            }
+        }
+    }
+}
+
+// MARK: - Demo Card Back
+
+struct DemoCardBack: View {
+    let width: CGFloat
+    let height: CGFloat
+    
+    var body: some View {
+        Image("card-back")
+            .resizable()
+            .scaledToFill()
+            .frame(width: width, height: height)
+            .clipped()
+            .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+    }
+}
+
+// MARK: - Demo Card Front (with text inside)
+
+struct DemoCardFront: View {
+    let role: PlayerRole
+    let width: CGFloat
+    let height: CGFloat
+    
+    var body: some View {
+        ZStack {
+            // Card frame background
+            Image("card-frame")
+                .resizable()
+                .scaledToFill()
+                .frame(width: width, height: height)
+                .clipped()
+            
+            // Content inside card
+            VStack(spacing: 0) {
+                Spacer()
+                    .frame(height: height * 0.08)
+                
+                // Role icon
+                Image(role.cardImage)
+                    .resizable()
+                    .aspectRatio(1, contentMode: .fit)
+                    .frame(width: width * 0.45)
+                
+                Spacer()
+                    .frame(height: height * 0.03)
+                
+                // Role name
+                Text(role.displayName)
+                    .font(.custom("Georgia-Bold", size: width * 0.08))
+                    .tracking(2)
+                    .foregroundColor(AppColors.inkDark)
+                
+                Spacer()
+                    .frame(height: height * 0.04)
+                
+                // Divider
+                Rectangle()
+                    .fill(AppColors.inkLight.opacity(0.2))
+                    .frame(width: width * 0.5, height: 1)
+                
+                Spacer()
+                    .frame(height: height * 0.03)
+                
+                // Role description text INSIDE the card
+                VStack(spacing: 4) {
+                    Text(roleTitle(for: role))
+                        .font(.custom("Georgia-Italic", size: width * 0.055))
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    Text(roleSubtitle(for: role))
+                        .font(.custom("Georgia", size: width * 0.045))
+                        .foregroundColor(AppColors.inkLight)
+                }
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, width * 0.1)
+                
+                Spacer()
+                    .frame(height: height * 0.08)
+            }
+            .frame(width: width, height: height)
+        }
+        .frame(width: width, height: height)
+        .clipped()
+    }
+    
+    private func roleTitle(for role: PlayerRole) -> String {
+        switch role {
+        case .frisk: return "You are healthy."
+        case .smittobarare: return "You are the Carrier."
+        case .infekterad: return "You are infected."
+        }
+    }
+    
+    private func roleSubtitle(for role: PlayerRole) -> String {
+        switch role {
+        case .frisk: return "Find the Carrier."
+        case .smittobarare: return "Infect them all."
+        case .infekterad: return "Seek a cure."
+        }
+    }
+}
+
+// MARK: - Demo Flippable Card
+
+struct DemoFlippableCard: View {
+    let role: PlayerRole
+    let cardWidth: CGFloat
+    let cardHeight: CGFloat
+    @Binding var isFlipped: Bool
+    
+    var body: some View {
+        ZStack {
+            // Back of card
+            DemoCardBack(width: cardWidth, height: cardHeight)
+                .rotation3DEffect(.degrees(isFlipped ? 180 : 0), axis: (x: 0, y: 1, z: 0), perspective: 0.5)
+                .opacity(isFlipped ? 0 : 1)
+            
+            // Front of card
+            DemoCardFront(role: role, width: cardWidth, height: cardHeight)
+                .rotation3DEffect(.degrees(isFlipped ? 0 : -180), axis: (x: 0, y: 1, z: 0), perspective: 0.5)
+                .opacity(isFlipped ? 1 : 0)
+        }
+        .frame(width: cardWidth, height: cardHeight)
+        .shadow(color: .black.opacity(isFlipped ? 0.3 : 0.2), radius: isFlipped ? 12 : 6, y: isFlipped ? 8 : 4)
     }
 }
 
@@ -600,10 +955,10 @@ struct RuleSection: View {
             VStack {
                 Text(romanNumeral(for: number))
                     .font(.custom("Georgia-Bold", size: 22))
-                    .foregroundColor(AppColors.burntOrange)
+                    .foregroundColor(AppColors.royalBlue)
                 
                 Rectangle()
-                    .fill(AppColors.burntOrange.opacity(0.3))
+                    .fill(AppColors.royalBlue.opacity(0.3))
                     .frame(width: 1, height: 40)
             }
             .frame(width: 36)
@@ -616,7 +971,7 @@ struct RuleSection: View {
                 
                 Text(description)
                     .font(.custom("Georgia", size: 15))
-                    .foregroundColor(AppColors.inkLight)
+                    .foregroundColor(AppColors.inkMedium)
                     .lineSpacing(5)
             }
         }
@@ -725,7 +1080,7 @@ struct MedievalButton: View {
 struct OrnamentLine: View {
     var body: some View {
         Rectangle()
-            .fill(AppColors.inkLight.opacity(0.3))
+            .fill(AppColors.warmBrown.opacity(0.5))
             .frame(height: 1)
     }
 }
@@ -733,8 +1088,8 @@ struct OrnamentLine: View {
 struct OrnamentDiamond: View {
     var body: some View {
         Rectangle()
-            .fill(AppColors.inkLight.opacity(0.4))
-            .frame(width: 6, height: 6)
+            .fill(AppColors.warmBrown.opacity(0.7))
+            .frame(width: 5, height: 5)
             .rotationEffect(.degrees(45))
     }
 }
@@ -747,7 +1102,7 @@ struct CornerOrnament: View {
             path.move(to: CGPoint(x: 0, y: 0))
             path.addLine(to: CGPoint(x: 0, y: 8))
         }
-        .stroke(AppColors.inkLight.opacity(0.4), lineWidth: 1.5)
+        .stroke(AppColors.warmGold.opacity(0.6), lineWidth: 1.5)
     }
 }
 
