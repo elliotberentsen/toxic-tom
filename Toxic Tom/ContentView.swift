@@ -24,6 +24,8 @@ struct GameCharacter: Identifiable, Equatable {
 
 enum AppView {
     case home
+    case localGame         // Local hotseat game
+    case onlineGame        // Online multiplayer game
     case characterSelect
     case rules
     case diceSimulator
@@ -40,8 +42,29 @@ struct ContentView: View {
     @State private var showSettings = false
     
     let characters: [GameCharacter] = [
-        GameCharacter(name: "The Monk", cardImage: "man-60", description: "A humble servant of faith"),
-        GameCharacter(name: "The Maiden", cardImage: "kvinna-30", description: "A woman of mystery")
+        // Royalty
+        GameCharacter(name: "Kungen", cardImage: "king", description: "Rikets högste härskare"),
+        GameCharacter(name: "Drottningen", cardImage: "queen", description: "Av kungligt blod"),
+        GameCharacter(name: "Adelsmannen", cardImage: "noble-man", description: "En man av börd"),
+        
+        // Clergy & Officials
+        GameCharacter(name: "Biskopen", cardImage: "bishop", description: "Kyrkans röst"),
+        GameCharacter(name: "Domaren", cardImage: "judge", description: "Rättvisans hand"),
+        GameCharacter(name: "Riddaren", cardImage: "knight", description: "Svärd och ära"),
+        
+        // Working Folk
+        GameCharacter(name: "Hantverkaren", cardImage: "craftsman", description: "Stadens smed"),
+        GameCharacter(name: "Ynglingen", cardImage: "young-man", description: "En ung man"),
+        
+        // Women
+        GameCharacter(name: "Helena", cardImage: "25-women", description: "Bryggarens dotter"),
+        GameCharacter(name: "Margareta", cardImage: "women-35", description: "Handelskvinnan"),
+        GameCharacter(name: "Birgitta", cardImage: "women-70", description: "Byns kloka kvinna"),
+        GameCharacter(name: "Nunnan", cardImage: "women-monk", description: "Klostrets syster"),
+        GameCharacter(name: "Spelkvinnan", cardImage: "women-musician", description: "Gatans musikant"),
+        
+        // Youth
+        GameCharacter(name: "Flickan", cardImage: "15-girl", description: "Ung och nyfiken")
     ]
     
     var body: some View {
@@ -53,6 +76,19 @@ struct ContentView: View {
             switch currentView {
             case .home:
                 homeView
+            case .localGame:
+                LocalGameView(onExit: {
+                    GameManager.shared.resetAll()
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentView = .home
+                    }
+                })
+            case .onlineGame:
+                OnlineGameView(onExit: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentView = .home
+                    }
+                })
             case .characterSelect:
                 characterSelectView
             case .rules:
@@ -126,7 +162,7 @@ struct ContentView: View {
                     Button(action: { 
                         SoundManager.shared.playClick()
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            currentView = .characterSelect
+                            currentView = .onlineGame
                         }
                     }) {
                         Text("Play")
@@ -240,23 +276,26 @@ struct ContentView: View {
             .padding(.top, 20)
             .padding(.bottom, 30)
             
-            // Character Cards
+            // Character Cards - 16 total with medieval woodcut style
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 20) {
+                HStack(spacing: 16) {
                     ForEach(characters) { character in
                         CharacterCard(
                             character: character,
                             isSelected: selectedCharacter == character
                         )
                         .onTapGesture {
+                            SoundManager.shared.playClick()
+                            let impact = UIImpactFeedbackGenerator(style: .light)
+                            impact.impactOccurred()
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
                                 selectedCharacter = selectedCharacter == character ? nil : character
                             }
                         }
                     }
                 }
-                .padding(.horizontal, 30)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
             }
             
             // Selected info
@@ -510,42 +549,30 @@ struct CharacterCard: View {
     let character: GameCharacter
     let isSelected: Bool
     
-    private let cardWidth: CGFloat = 140
-    private var cardHeight: CGFloat { cardWidth * 1.5 }
+    @State private var isPressed = false
+    
+    private let cardSize: CGFloat = 130
     
     var body: some View {
-        ZStack {
-            Image(character.cardImage)
-                .resizable()
-                .aspectRatio(2/3, contentMode: .fill)
-                .frame(width: cardWidth, height: cardHeight)
-            
-            if isSelected {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(AppColors.burntOrange, lineWidth: 4)
-                    .frame(width: cardWidth, height: cardHeight)
-                
-                VStack {
-                    HStack {
-                        Spacer()
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundColor(AppColors.burntOrange)
-                            .background(Circle().fill(.white).frame(width: 20, height: 20))
-                            .offset(x: 8, y: -8)
-                    }
-                    Spacer()
-                }
-                .frame(width: cardWidth, height: cardHeight)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .shadow(
-            color: isSelected ? AppColors.burntOrange.opacity(0.3) : Color.black.opacity(0.15),
-            radius: isSelected ? 12 : 4,
-            y: isSelected ? 0 : 2
-        )
-        .scaleEffect(isSelected ? 1.08 : 1.0)
+        Image(character.cardImage)
+            .resizable()
+            .scaledToFit()
+            .frame(width: cardSize, height: cardSize)
+            // Zoom effect for selection
+            .scaleEffect(isSelected ? 1.1 : (isPressed ? 0.95 : 1.0))
+            .shadow(
+                color: Color.black.opacity(isSelected ? 0.25 : 0.15),
+                radius: isSelected ? 10 : 4,
+                y: isSelected ? 5 : 3
+            )
+            .opacity(isSelected ? 1.0 : 0.85)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in isPressed = true }
+                    .onEnded { _ in isPressed = false }
+            )
     }
 }
 
@@ -878,13 +905,18 @@ struct CardFlipDemoView: View {
     
     @State private var isFlipped = false
     @State private var showButton = false
+    @State private var currentRoleIndex = 0
     
-    // Card takes up most of screen - using exact image ratio (1136:1962)
-    private let cardWidth: CGFloat = 280
-    private var cardHeight: CGFloat { cardWidth * (1962.0 / 1136.0) }
+    // Card takes up most of screen - using exact image ratio (805:1172)
+    private let cardWidth: CGFloat = 260
+    private var cardHeight: CGFloat { cardWidth * (1172.0 / 805.0) }
     
-    // Test with "frisk" (healthy) role
-    private let testRole: PlayerRole = .frisk
+    // Roles to cycle through - first Frisk, then Smittobärare
+    private let roles: [PlayerRole] = [.frisk, .smittobarare]
+    
+    private var currentRole: PlayerRole {
+        roles[currentRoleIndex % roles.count]
+    }
     
     var body: some View {
         ZStack {
@@ -922,13 +954,17 @@ struct CardFlipDemoView: View {
                     
                     Spacer()
                     
-                    // Reset button with subtle background
+                    // Reset button - advances to next role
                     if isFlipped {
                         Button(action: {
                             SoundManager.shared.playClick()
                             withAnimation(.easeInOut(duration: 0.4)) {
                                 isFlipped = false
                                 showButton = false
+                            }
+                            // Advance to next role after card closes
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                currentRoleIndex += 1
                             }
                         }) {
                             Text("Reset")
@@ -966,7 +1002,7 @@ struct CardFlipDemoView: View {
                     
                     // Flippable top card - aligned exactly with deck's top card
                     DemoFlippableCard(
-                        role: testRole,
+                        role: currentRole,
                         cardWidth: cardWidth,
                         cardHeight: cardHeight,
                         isFlipped: $isFlipped
@@ -993,12 +1029,19 @@ struct CardFlipDemoView: View {
                 
                 Spacer()
                 
-                // Continue button (appears after flip) - text style matching home
+                // Continue button (appears after flip) - resets and advances to next role
                 if showButton {
                     Button(action: {
                         SoundManager.shared.playClick()
-                        // Would continue to next player or game phase
-                        print("Continue tapped")
+                        // Reset card and advance to next role
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            isFlipped = false
+                            showButton = false
+                        }
+                        // Advance to next role after card closes
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            currentRoleIndex += 1
+                        }
                     }) {
                         Text("I Understand")
                             .font(.custom("Georgia-Bold", size: 20))
@@ -1056,8 +1099,8 @@ struct DemoCardFront: View {
     
     var body: some View {
         ZStack {
-            // Card frame background
-            Image("card-frame")
+            // Card front background (parchment)
+            Image("card-front")
                 .resizable()
                 .scaledToFill()
                 .frame(width: width, height: height)
@@ -1066,20 +1109,20 @@ struct DemoCardFront: View {
             // Content inside card
             VStack(spacing: 0) {
                 Spacer()
-                    .frame(height: height * 0.03)
+                    .frame(height: height * 0.08)
                 
                 // Role icon - prominent size as main focus
                 Image(role.cardImage)
                     .resizable()
                     .aspectRatio(1, contentMode: .fit)
-                    .frame(width: width * 0.75)
+                    .frame(width: width * 0.65)
                 
                 Spacer()
-                    .frame(height: height * 0.015)
+                    .frame(height: height * 0.03)
                 
                 // Role name
                 Text(role.displayName)
-                    .font(.custom("Georgia-Bold", size: width * 0.085))
+                    .font(.custom("Georgia-Bold", size: width * 0.09))
                     .tracking(2)
                     .foregroundColor(AppColors.inkDark)
                 
@@ -1088,27 +1131,27 @@ struct DemoCardFront: View {
                 
                 // Divider
                 Rectangle()
-                    .fill(AppColors.inkLight.opacity(0.2))
-                    .frame(width: width * 0.5, height: 1)
+                    .fill(AppColors.warmBrown.opacity(0.3))
+                    .frame(width: width * 0.4, height: 1)
                 
                 Spacer()
-                    .frame(height: height * 0.015)
+                    .frame(height: height * 0.02)
                 
                 // Role description text INSIDE the card
-                VStack(spacing: 3) {
+                VStack(spacing: 4) {
                     Text(roleTitle(for: role))
-                        .font(.custom("Georgia-Italic", size: width * 0.05))
+                        .font(.custom("Georgia-Italic", size: width * 0.055))
                         .foregroundColor(AppColors.inkDark)
                     
                     Text(roleSubtitle(for: role))
-                        .font(.custom("Georgia", size: width * 0.042))
-                        .foregroundColor(AppColors.inkDark.opacity(0.6))
+                        .font(.custom("Georgia", size: width * 0.045))
+                        .foregroundColor(AppColors.inkMedium)
                 }
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, width * 0.08)
+                .padding(.horizontal, width * 0.1)
                 
                 Spacer()
-                    .frame(height: height * 0.04)
+                    .frame(height: height * 0.06)
             }
             .frame(width: width, height: height)
         }

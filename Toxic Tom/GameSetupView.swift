@@ -383,22 +383,28 @@ struct AvatarOption: View {
     let avatar: CharacterAvatar
     let isSelected: Bool
     
+    @State private var isPressed = false
+    
     var body: some View {
         Image(avatar.imageName)
             .resizable()
-            .aspectRatio(2/3, contentMode: .fill)
-            .frame(width: 60, height: 80)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? AppColors.burntOrange : Color.clear, lineWidth: 3)
-            )
+            .scaledToFit()
+            .frame(width: 80, height: 80)
+            // Zoom effect for selection
+            .scaleEffect(isSelected ? 1.1 : (isPressed ? 0.95 : 1.0))
             .shadow(
-                color: isSelected ? AppColors.warmGold.opacity(0.5) : Color.black.opacity(0.15),
-                radius: isSelected ? 8 : 3,
-                y: isSelected ? 0 : 2
+                color: Color.black.opacity(isSelected ? 0.25 : 0.1),
+                radius: isSelected ? 6 : 2,
+                y: isSelected ? 3 : 1
             )
-            .scaleEffect(isSelected ? 1.05 : 1.0)
+            .opacity(isSelected ? 1.0 : 0.85)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in isPressed = true }
+                    .onEnded { _ in isPressed = false }
+            )
     }
 }
 
@@ -621,8 +627,8 @@ struct CardFrontView: View {
     
     var body: some View {
         ZStack {
-            // Card frame/background (parchment)
-            Image("card-frame")
+            // Card front background (parchment)
+            Image("card-front")
                 .resizable()
                 .scaledToFill()
                 .frame(width: width, height: height)
@@ -631,22 +637,22 @@ struct CardFrontView: View {
             // Content overlay
             VStack(spacing: 0) {
                 Spacer()
-                    .frame(height: height * 0.1)
+                    .frame(height: height * 0.08)
                 
                 // Role icon
                 Image(roleIcon)
                     .resizable()
                     .aspectRatio(1, contentMode: .fit)
-                    .frame(width: width * 0.5)
+                    .frame(width: width * 0.6)
                 
                 Spacer()
                 
                 // Role name
                 Text(roleName)
-                    .font(.custom("Georgia-Bold", size: width * 0.075))
+                    .font(.custom("Georgia-Bold", size: width * 0.085))
                     .tracking(2)
                     .foregroundColor(AppColors.inkDark)
-                    .padding(.bottom, height * 0.08)
+                    .padding(.bottom, height * 0.1)
             }
             .frame(width: width, height: height)
         }
@@ -722,8 +728,9 @@ struct RoleCardReveal: View {
     @State private var showContent: Bool = false
     @State private var canTap: Bool = true
     
+    // Card dimensions using new aspect ratio (805:1172)
     private let cardWidth: CGFloat = 220
-    private var cardHeight: CGFloat { cardWidth * 1.55 }
+    private var cardHeight: CGFloat { cardWidth * (1172.0 / 805.0) }
     
     var body: some View {
         VStack(spacing: 0) {

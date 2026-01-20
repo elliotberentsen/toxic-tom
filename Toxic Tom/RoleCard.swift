@@ -26,9 +26,12 @@ struct RoleCard: View {
                 cardBack
             }
         }
-        .frame(width: 180, height: 270)  // 2:3 aspect ratio matching your images
+        .frame(width: cardWidth, height: cardHeight)  // 805:1172 aspect ratio matching new cards
         .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
     }
+    
+    private let cardWidth: CGFloat = 180
+    private var cardHeight: CGFloat { cardWidth * (1172.0 / 805.0) }
     
     // MARK: - Card Front (Character + Border)
     
@@ -38,14 +41,14 @@ struct RoleCard: View {
             Image(characterImage)
                 .resizable()
                 .scaledToFill()
-                .frame(width: 180, height: 270)
+                .frame(width: cardWidth, height: cardHeight)
                 .clipped()
             
             // Border overlay
             Image(borderImage)
                 .resizable()
                 .scaledToFill()
-                .frame(width: 180, height: 270)
+                .frame(width: cardWidth, height: cardHeight)
                 .clipped()
             
             // Role name at bottom
@@ -53,7 +56,7 @@ struct RoleCard: View {
                 Spacer()
                 
                 Text(roleName.uppercased())
-                    .font(.system(size: 14, weight: .bold, design: .serif))
+                    .font(.custom("Georgia-Bold", size: 14))
                     .tracking(2)
                     .foregroundColor(Color(red: 0.9, green: 0.85, blue: 0.7))
                     .shadow(color: .black, radius: 2, x: 0, y: 1)
@@ -66,15 +69,25 @@ struct RoleCard: View {
                     .padding(.bottom, 20)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
     
     // MARK: - Card Back (Hidden)
     
     private var cardBack: some View {
+        Image("card-back")
+            .resizable()
+            .scaledToFill()
+            .frame(width: cardWidth, height: cardHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+    
+    // MARK: - Legacy Card Back (Hidden) - Keeping for reference
+    
+    private var cardBackLegacy: some View {
         ZStack {
             // Dark background
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 8)
                 .fill(
                     LinearGradient(
                         colors: [

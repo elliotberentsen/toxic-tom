@@ -25,7 +25,7 @@ enum PlayerRole: String, CaseIterable {
     var displayName: String {
         switch self {
         case .frisk: return "FRISK"
-        case .smittobarare: return "SMITTOBÄRAREN"
+        case .smittobarare: return "DR. PLAGUE"
         case .infekterad: return "INFEKTERAD"
         }
     }
@@ -59,15 +59,29 @@ struct CharacterAvatar: Identifiable, Equatable, Hashable {
     let imageName: String
     
     static let allAvatars: [CharacterAvatar] = [
-        // Face portraits
-        CharacterAvatar(id: "kvinna-30", name: "Helena", imageName: "kvinna-30"),
-        CharacterAvatar(id: "kvinna-45", name: "Margareta", imageName: "kvinna-45"),
-        CharacterAvatar(id: "kvinna-60", name: "Birgitta", imageName: "kvinna-ansikte-60"),
-        CharacterAvatar(id: "man-60", name: "Erik", imageName: "man-60-ansikte"),
-        CharacterAvatar(id: "man-65", name: "Gustav", imageName: "man-65"),
-        CharacterAvatar(id: "women-20", name: "Kristina", imageName: "women-20"),
-        CharacterAvatar(id: "women-45", name: "Ingrid", imageName: "women-45"),
-        CharacterAvatar(id: "women-65", name: "Elsa", imageName: "women-65")
+        // Royalty
+        CharacterAvatar(id: "king", name: "Kungen", imageName: "king"),
+        CharacterAvatar(id: "queen", name: "Drottningen", imageName: "queen"),
+        CharacterAvatar(id: "noble-man", name: "Adelsmannen", imageName: "noble-man"),
+        
+        // Clergy & Officials
+        CharacterAvatar(id: "bishop", name: "Biskopen", imageName: "bishop"),
+        CharacterAvatar(id: "judge", name: "Domaren", imageName: "judge"),
+        CharacterAvatar(id: "knight", name: "Riddaren", imageName: "knight"),
+        
+        // Working Folk
+        CharacterAvatar(id: "craftsman", name: "Hantverkaren", imageName: "craftsman"),
+        CharacterAvatar(id: "young-man", name: "Ynglingen", imageName: "young-man"),
+        
+        // Women
+        CharacterAvatar(id: "25-women", name: "Helena", imageName: "25-women"),
+        CharacterAvatar(id: "women-35", name: "Margareta", imageName: "women-35"),
+        CharacterAvatar(id: "women-70", name: "Birgitta", imageName: "women-70"),
+        CharacterAvatar(id: "women-monk", name: "Nunnan", imageName: "women-monk"),
+        CharacterAvatar(id: "women-musician", name: "Spelkvinnan", imageName: "women-musician"),
+        
+        // Youth
+        CharacterAvatar(id: "15-girl", name: "Flickan", imageName: "15-girl")
     ]
 }
 
