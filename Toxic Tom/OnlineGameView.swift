@@ -15,7 +15,10 @@ enum OnlineViewPhase {
     case joinLobby         // Enter code + name/avatar to join
     case lobby             // In lobby waiting for players
     case roleReveal        // Seeing your role
-    case playing           // Game in progress
+    case electionLakare    // Voting for Läkare
+    case electionVaktare   // Voting for Väktare
+    case round             // Active round (protection, cure, voting, resolution)
+    case gameOver          // Game finished
 }
 
 // MARK: - Main Online Game View
@@ -102,15 +105,37 @@ struct OnlineGameView: View {
             case .roleReveal:
                 OnlineRoleRevealView(
                     onContinue: {
-                        withAnimation(.easeInOut(duration: 0.4)) {
-                            phase = .playing
+                        // Host starts the election after confirming role
+                        if firebase.isHost {
+                            Task {
+                                try? await firebase.startLakareElection()
+                            }
                         }
+                        // Phase will transition via Firebase observer
                     }
                 )
                 .transition(.opacity)
                 
-            case .playing:
-                OnlinePlayingView(
+            case .electionLakare:
+                ElectionView(electionType: .lakare)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                
+            case .electionVaktare:
+                ElectionView(electionType: .vaktare)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                
+            case .round:
+                OnlineRoundView()
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                
+            case .gameOver:
+                OnlineGameOverView(
+                    onPlayAgain: {
+                        firebase.leaveLobby()
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            phase = .menu
+                        }
+                    },
                     onExit: {
                         firebase.leaveLobby()
                         withAnimation(.easeInOut(duration: 0.4)) {
@@ -147,9 +172,24 @@ struct OnlineGameView: View {
         }
         .onChange(of: firebase.currentLobby?.gamePhase) { newPhase in
             // React to game phase changes from Firebase
-            if newPhase == .roleReveal && phase == .lobby {
-                withAnimation(.easeInOut(duration: 0.4)) {
-                    phase = .roleReveal
+            guard let newPhase = newPhase else { return }
+            
+            withAnimation(.easeInOut(duration: 0.4)) {
+                switch newPhase {
+                case .roleReveal:
+                    if phase == .lobby {
+                        phase = .roleReveal
+                    }
+                case .electionLakare:
+                    phase = .electionLakare
+                case .electionVaktare:
+                    phase = .electionVaktare
+                case .round:
+                    phase = .round
+                case .finished:
+                    phase = .gameOver
+                default:
+                    break
                 }
             }
         }
@@ -336,6 +376,7 @@ struct CreateLobbyView: View {
     @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
     @State private var playerName = ""
     @State private var selectedAvatar: CharacterAvatar?
+    @State private var previewAvatar: CharacterAvatar?
     @State private var showNameError = false
     @State private var isCreating = false
     @FocusState private var isNameFocused: Bool
@@ -351,67 +392,89 @@ struct CreateLobbyView: View {
     // Column definitions will be created dynamically based on screen width
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Fixed header
-            HStack {
-                Button(action: {
-                    SoundManager.shared.playClick()
-                    if step == .character {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            step = .name
+        ZStack {
+            VStack(spacing: 0) {
+                // Fixed header
+                HStack {
+                    Button(action: {
+                        SoundManager.shared.playClick()
+                        if step == .character {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                step = .name
+                            }
+                        } else {
+                            onBack()
                         }
-                    } else {
-                        onBack()
+                    }) {
+                        HStack(spacing: AppSpacing.xs) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Tillbaka")
+                                .font(AppFonts.bodyMedium())
+                        }
+                        .foregroundColor(AppColors.warmBrown)
                     }
-                }) {
-                    HStack(spacing: AppSpacing.xs) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text("Tillbaka")
-                            .font(AppFonts.bodyMedium())
-                    }
-                    .foregroundColor(AppColors.warmBrown)
+                    Spacer()
+                    
+                    // Step indicator
+                    Text(step == .name ? "1 / 2" : "2 / 2")
+                        .font(AppFonts.caption())
+                        .foregroundColor(AppColors.inkMedium)
+                        .padding(.horizontal, AppSpacing.sm)
+                        .padding(.vertical, AppSpacing.xs)
+                        .background(
+                            Capsule()
+                                .fill(AppColors.warmBrown.opacity(0.1))
+                        )
                 }
-                Spacer()
+                .padding(.horizontal, AppSpacing.lg)
+                .padding(.top, AppSpacing.md)
+                .padding(.bottom, AppSpacing.sm)
                 
-                // Step indicator
-                Text(step == .name ? "1 / 2" : "2 / 2")
-                    .font(AppFonts.caption())
-                    .foregroundColor(AppColors.inkMedium)
-                    .padding(.horizontal, AppSpacing.sm)
-                    .padding(.vertical, AppSpacing.xs)
-                    .background(
-                        Capsule()
-                            .fill(AppColors.warmBrown.opacity(0.1))
-                    )
-            }
-            .padding(.horizontal, AppSpacing.lg)
-            .padding(.top, AppSpacing.md)
-            .padding(.bottom, AppSpacing.sm)
-            
-            // Content area - MUST fill remaining space
-            Group {
-                if step == .name {
-                    nameStepView
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .leading).combined(with: .opacity),
-                            removal: .move(edge: .leading).combined(with: .opacity)
-                        ))
-                } else {
-                    characterStepView
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .trailing).combined(with: .opacity)
-                        ))
+                // Content area - MUST fill remaining space
+                Group {
+                    if step == .name {
+                        nameStepView
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .leading).combined(with: .opacity),
+                                removal: .move(edge: .leading).combined(with: .opacity)
+                            ))
+                    } else {
+                        characterStepView
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .move(edge: .trailing).combined(with: .opacity)
+                            ))
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            // Full-screen character confirmation overlay - covers entire view including header
+            if let avatar = previewAvatar {
+                CharacterConfirmationOverlay(
+                    avatar: avatar,
+                    isLoading: isCreating,
+                    confirmButtonText: "Skapa Lobby",
+                    onConfirm: {
+                        selectedAvatar = avatar
+                        Task {
+                            await createLobby()
+                        }
+                    },
+                    onCancel: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            previewAvatar = nil
+                        }
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: playerName) { _ in
             if showNameError { showNameError = false }
         }
-        .scrollDismissesKeyboard(.interactively)
         .animation(.easeInOut(duration: 0.3), value: step)
     }
     
@@ -484,7 +547,9 @@ struct CreateLobbyView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            // Fixed bottom button
+            // Fixed bottom button - medieval panel style
+            let hasName = !playerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            
             Button(action: {
                 let trimmedName = playerName.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmedName.isEmpty else {
@@ -501,20 +566,52 @@ struct CreateLobbyView: View {
                     step = .character
                 }
             }) {
-                HStack(spacing: AppSpacing.sm) {
-                    Text("Välj karaktär")
-                        .font(AppFonts.headingSmall())
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 16, weight: .bold))
+                ZStack {
+                    // Panel background
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(hasName ? Color(hex: "f5edd8") : Color(hex: "e8e0d0"))
+                        .shadow(color: Color.black.opacity(hasName ? 0.12 : 0.06), radius: 4, y: 3)
+                    
+                    // Double border
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(AppColors.warmBrown.opacity(hasName ? 0.6 : 0.3), lineWidth: 1.5)
+                    
+                    // Inner border
+                    RoundedRectangle(cornerRadius: 2)
+                        .stroke(AppColors.warmBrown.opacity(hasName ? 0.2 : 0.1), lineWidth: 0.5)
+                        .padding(4)
+                    
+                    // Corner ornaments
+                    if hasName {
+                        VStack {
+                            HStack {
+                                CornerOrnamentSmall()
+                                Spacer()
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(90))
+                            }
+                            Spacer()
+                            HStack {
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(-90))
+                                Spacer()
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(180))
+                            }
+                        }
+                        .padding(6)
+                    }
+                    
+                    // Content
+                    HStack(spacing: AppSpacing.sm) {
+                        Text("Välj karaktär")
+                            .font(.custom("Georgia-Bold", size: 18))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundColor(hasName ? AppColors.inkDark : AppColors.inkMedium)
                 }
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, AppSpacing.md)
-                .background(
-                    RoundedRectangle(cornerRadius: AppRadius.md)
-                        .fill(!playerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? AppColors.warmBrown : AppColors.inkMedium.opacity(0.3))
-                        .shadow(color: AppColors.inkDark.opacity(0.15), radius: 4, y: 2)
-                )
+                .frame(height: 56)
             }
             .padding(.horizontal, AppSpacing.lg)
             .padding(.top, AppSpacing.sm)
@@ -539,96 +636,52 @@ struct CreateLobbyView: View {
                 OrnamentDivider(width: 60, color: AppColors.warmBrown.opacity(0.4))
             }
             .padding(.top, 8)
-            .padding(.bottom, 28)
+            .padding(.bottom, 20)
             
-            // Character grid with precise spacing
+            // Character grid - 2 columns with names
             GeometryReader { geometry in
-                let horizontalPadding: CGFloat = 16
-                let spacing: CGFloat = 12
+                let spacing: CGFloat = AppSpacing.md
+                let horizontalPadding: CGFloat = AppSpacing.lg
                 let availableWidth = geometry.size.width - (horizontalPadding * 2)
-                let itemWidth = (availableWidth - spacing) / 2
-                let itemHeight = itemWidth * (1413.0 / 1143.0)
+                let cardWidth = (availableWidth - spacing) / 2
+                let cardHeight = cardWidth / CharacterAvatar.cardAspectRatio
                 
                 let columns = [
-                    GridItem(.fixed(itemWidth), spacing: spacing),
-                    GridItem(.fixed(itemWidth), spacing: spacing)
+                    GridItem(.fixed(cardWidth), spacing: spacing),
+                    GridItem(.fixed(cardWidth), spacing: spacing)
                 ]
                 
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: spacing) {
+                    LazyVGrid(columns: columns, spacing: AppSpacing.lg) {
                         ForEach(CharacterAvatar.allAvatars) { avatar in
-                            let isSelected = selectedAvatar?.id == avatar.id
-                            let hasSelection = selectedAvatar != nil
-                            
-                            Image(avatar.imageName)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: itemWidth, height: itemHeight)
-                                .clipped()
-                                .saturation(hasSelection && !isSelected ? 0.7 : 1.0)
-                                .opacity(hasSelection && !isSelected ? 0.85 : 1.0)
-                                .scaleEffect(isSelected ? 1.03 : 1.0)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    SoundManager.shared.playClick()
-                                    let impact = UIImpactFeedbackGenerator(style: .medium)
-                                    impact.impactOccurred()
-                                    withAnimation(.spring(response: 0.3)) {
-                                        selectedAvatar = avatar
-                                    }
+                            VStack(spacing: AppSpacing.xs) {
+                                Image(avatar.imageName)
+                                    .resizable()
+                                    .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fit)
+                                    .frame(width: cardWidth, height: cardHeight)
+                                    .contentShape(Rectangle())
+                                
+                                Text(avatar.displayName)
+                                    .font(AppFonts.bodySmall())
+                                    .foregroundColor(AppColors.inkMedium)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.center)
+                                    .minimumScaleFactor(0.7)
+                            }
+                            .onTapGesture {
+                                SoundManager.shared.playClick()
+                                let impact = UIImpactFeedbackGenerator(style: .medium)
+                                impact.impactOccurred()
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    previewAvatar = avatar
                                 }
+                            }
                         }
                     }
                     .padding(.horizontal, horizontalPadding)
-                    .padding(.bottom, 16)
+                    .padding(.bottom, 100)
                 }
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            // Fixed bottom button with gradient blur background
-            VStack(spacing: 0) {
-                Button(action: {
-                    Task {
-                        await createLobby()
-                    }
-                }) {
-                    HStack(spacing: AppSpacing.sm) {
-                        if isCreating {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        } else {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 18))
-                            Text("Skapa Lobby")
-                                .font(AppFonts.headingSmall())
-                        }
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, AppSpacing.md)
-                    .background(
-                        RoundedRectangle(cornerRadius: AppRadius.md)
-                            .fill(selectedAvatar != nil ? AppColors.warmBrown : AppColors.inkMedium.opacity(0.3))
-                            .shadow(color: AppColors.inkDark.opacity(0.15), radius: 4, y: 2)
-                    )
-                }
-                .disabled(selectedAvatar == nil || isCreating)
-                .padding(.horizontal, AppSpacing.lg)
-                .padding(.top, AppSpacing.md)
-                .padding(.bottom, AppSpacing.sm)
-            }
-            .background(
-                // Gradient fade from transparent at top to solid at bottom
-                LinearGradient(
-                    stops: [
-                        .init(color: AppColors.parchment.opacity(0), location: 0),
-                        .init(color: AppColors.parchment.opacity(0.85), location: 0.4),
-                        .init(color: AppColors.parchment, location: 1.0)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
         }
     }
     
@@ -690,6 +743,7 @@ struct JoinLobbyView: View {
     @State private var lobbyCode = ""
     @State private var playerName = ""
     @State private var selectedAvatar: CharacterAvatar?
+    @State private var previewAvatar: CharacterAvatar?
     @State private var showCodeError = false
     @State private var showNameError = false
     @State private var isJoining = false
@@ -710,64 +764,86 @@ struct JoinLobbyView: View {
     // Column definitions will be created dynamically based on screen width
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Fixed header
-            HStack {
-                Button(action: {
-                    SoundManager.shared.playClick()
-                    if step == .character {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            step = .codeAndName
+        ZStack {
+            VStack(spacing: 0) {
+                // Fixed header
+                HStack {
+                    Button(action: {
+                        SoundManager.shared.playClick()
+                        if step == .character {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                step = .codeAndName
+                            }
+                        } else {
+                            onBack()
                         }
-                    } else {
-                        onBack()
+                    }) {
+                        HStack(spacing: AppSpacing.xs) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Tillbaka")
+                                .font(AppFonts.bodyMedium())
+                        }
+                        .foregroundColor(AppColors.warmBrown)
                     }
-                }) {
-                    HStack(spacing: AppSpacing.xs) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text("Tillbaka")
-                            .font(AppFonts.bodyMedium())
-                    }
-                    .foregroundColor(AppColors.warmBrown)
+                    Spacer()
+                    
+                    // Step indicator
+                    Text(step == .codeAndName ? "1 / 2" : "2 / 2")
+                        .font(AppFonts.caption())
+                        .foregroundColor(AppColors.inkMedium)
+                        .padding(.horizontal, AppSpacing.sm)
+                        .padding(.vertical, AppSpacing.xs)
+                        .background(
+                            Capsule()
+                                .fill(AppColors.warmBrown.opacity(0.1))
+                            )
                 }
-                Spacer()
+                .padding(.horizontal, AppSpacing.lg)
+                .padding(.top, AppSpacing.md)
+                .padding(.bottom, AppSpacing.sm)
                 
-                // Step indicator
-                Text(step == .codeAndName ? "1 / 2" : "2 / 2")
-                    .font(AppFonts.caption())
-                    .foregroundColor(AppColors.inkMedium)
-                    .padding(.horizontal, AppSpacing.sm)
-                    .padding(.vertical, AppSpacing.xs)
-                    .background(
-                        Capsule()
-                            .fill(AppColors.warmBrown.opacity(0.1))
-                    )
-            }
-            .padding(.horizontal, AppSpacing.lg)
-            .padding(.top, AppSpacing.md)
-            .padding(.bottom, AppSpacing.sm)
-            
-            // Content area - MUST fill remaining space
-            Group {
-                if step == .codeAndName {
-                    codeAndNameStepView
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .leading).combined(with: .opacity),
-                            removal: .move(edge: .leading).combined(with: .opacity)
-                        ))
-                } else {
-                    characterStepView
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .trailing).combined(with: .opacity)
-                        ))
+                // Content area - MUST fill remaining space
+                Group {
+                    if step == .codeAndName {
+                        codeAndNameStepView
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .leading).combined(with: .opacity),
+                                removal: .move(edge: .leading).combined(with: .opacity)
+                            ))
+                    } else {
+                        characterStepView
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .move(edge: .trailing).combined(with: .opacity)
+                            ))
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            // Full-screen character confirmation overlay - covers entire view including header
+            if let avatar = previewAvatar {
+                CharacterConfirmationOverlay(
+                    avatar: avatar,
+                    isLoading: isJoining,
+                    confirmButtonText: "Gå med",
+                    onConfirm: {
+                        selectedAvatar = avatar
+                        Task {
+                            await joinLobby()
+                        }
+                    },
+                    onCancel: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            previewAvatar = nil
+                        }
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .scrollDismissesKeyboard(.interactively)
         .animation(.easeInOut(duration: 0.3), value: step)
     }
     
@@ -895,7 +971,7 @@ struct JoinLobbyView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            // Fixed bottom button
+            // Fixed bottom button - medieval panel style
             Button(action: {
                 guard lobbyCode.count == 6 else {
                     showCodeError = true
@@ -918,20 +994,52 @@ struct JoinLobbyView: View {
                     step = .character
                 }
             }) {
-                HStack(spacing: AppSpacing.sm) {
-                    Text("Fortsätt")
-                        .font(AppFonts.headingSmall())
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 16, weight: .bold))
+                ZStack {
+                    // Panel background
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(canProceed ? Color(hex: "f5edd8") : Color(hex: "e8e0d0"))
+                        .shadow(color: Color.black.opacity(canProceed ? 0.12 : 0.06), radius: 4, y: 3)
+                    
+                    // Double border
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(AppColors.warmBrown.opacity(canProceed ? 0.6 : 0.3), lineWidth: 1.5)
+                    
+                    // Inner border
+                    RoundedRectangle(cornerRadius: 2)
+                        .stroke(AppColors.warmBrown.opacity(canProceed ? 0.2 : 0.1), lineWidth: 0.5)
+                        .padding(4)
+                    
+                    // Corner ornaments
+                    if canProceed {
+                        VStack {
+                            HStack {
+                                CornerOrnamentSmall()
+                                Spacer()
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(90))
+                            }
+                            Spacer()
+                            HStack {
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(-90))
+                                Spacer()
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(180))
+                            }
+                        }
+                        .padding(6)
+                    }
+                    
+                    // Content
+                    HStack(spacing: AppSpacing.sm) {
+                        Text("Fortsätt")
+                            .font(.custom("Georgia-Bold", size: 18))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundColor(canProceed ? AppColors.inkDark : AppColors.inkMedium)
                 }
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, AppSpacing.md)
-                .background(
-                    RoundedRectangle(cornerRadius: AppRadius.md)
-                        .fill(canProceed ? AppColors.warmBrown : AppColors.inkMedium.opacity(0.3))
-                        .shadow(color: AppColors.inkDark.opacity(0.15), radius: 4, y: 2)
-                )
+                .frame(height: 56)
             }
             .padding(.horizontal, AppSpacing.lg)
             .padding(.vertical, AppSpacing.sm)
@@ -959,96 +1067,52 @@ struct JoinLobbyView: View {
                 OrnamentDivider(width: 60, color: AppColors.warmBrown.opacity(0.4))
             }
             .padding(.top, 8)
-            .padding(.bottom, 28)
+            .padding(.bottom, 20)
             
-            // Character grid with precise spacing
+            // Character grid - 2 columns with names
             GeometryReader { geometry in
-                let horizontalPadding: CGFloat = 16
-                let spacing: CGFloat = 12
+                let spacing: CGFloat = AppSpacing.md
+                let horizontalPadding: CGFloat = AppSpacing.lg
                 let availableWidth = geometry.size.width - (horizontalPadding * 2)
-                let itemWidth = (availableWidth - spacing) / 2
-                let itemHeight = itemWidth * (1413.0 / 1143.0)
+                let cardWidth = (availableWidth - spacing) / 2
+                let cardHeight = cardWidth / CharacterAvatar.cardAspectRatio
                 
                 let columns = [
-                    GridItem(.fixed(itemWidth), spacing: spacing),
-                    GridItem(.fixed(itemWidth), spacing: spacing)
+                    GridItem(.fixed(cardWidth), spacing: spacing),
+                    GridItem(.fixed(cardWidth), spacing: spacing)
                 ]
                 
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: spacing) {
+                    LazyVGrid(columns: columns, spacing: AppSpacing.lg) {
                         ForEach(CharacterAvatar.allAvatars) { avatar in
-                            let isSelected = selectedAvatar?.id == avatar.id
-                            let hasSelection = selectedAvatar != nil
-                            
-                            Image(avatar.imageName)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: itemWidth, height: itemHeight)
-                                .clipped()
-                                .saturation(hasSelection && !isSelected ? 0.7 : 1.0)
-                                .opacity(hasSelection && !isSelected ? 0.85 : 1.0)
-                                .scaleEffect(isSelected ? 1.03 : 1.0)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    SoundManager.shared.playClick()
-                                    let impact = UIImpactFeedbackGenerator(style: .medium)
-                                    impact.impactOccurred()
-                                    withAnimation(.spring(response: 0.3)) {
-                                        selectedAvatar = avatar
-                                    }
+                            VStack(spacing: AppSpacing.xs) {
+                                Image(avatar.imageName)
+                                    .resizable()
+                                    .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fit)
+                                    .frame(width: cardWidth, height: cardHeight)
+                                    .contentShape(Rectangle())
+                                
+                                Text(avatar.displayName)
+                                    .font(AppFonts.bodySmall())
+                                    .foregroundColor(AppColors.inkMedium)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.center)
+                                    .minimumScaleFactor(0.7)
+                            }
+                            .onTapGesture {
+                                SoundManager.shared.playClick()
+                                let impact = UIImpactFeedbackGenerator(style: .medium)
+                                impact.impactOccurred()
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    previewAvatar = avatar
                                 }
+                            }
                         }
                     }
                     .padding(.horizontal, horizontalPadding)
-                    .padding(.bottom, 16)
+                    .padding(.bottom, 100)
                 }
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            // Fixed bottom button with gradient blur background
-            VStack(spacing: 0) {
-                Button(action: {
-                    Task {
-                        await joinLobby()
-                    }
-                }) {
-                    HStack(spacing: AppSpacing.sm) {
-                        if isJoining {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        } else {
-                            Image(systemName: "arrow.right.circle.fill")
-                                .font(.system(size: 18))
-                            Text("Gå med")
-                                .font(AppFonts.headingSmall())
-                        }
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, AppSpacing.md)
-                    .background(
-                        RoundedRectangle(cornerRadius: AppRadius.md)
-                            .fill(selectedAvatar != nil ? AppColors.warmBrown : AppColors.inkMedium.opacity(0.3))
-                            .shadow(color: AppColors.inkDark.opacity(0.15), radius: 4, y: 2)
-                    )
-                }
-                .disabled(selectedAvatar == nil || isJoining)
-                .padding(.horizontal, AppSpacing.lg)
-                .padding(.top, AppSpacing.md)
-                .padding(.bottom, AppSpacing.sm)
-            }
-            .background(
-                // Gradient fade from transparent at top to solid at bottom
-                LinearGradient(
-                    stops: [
-                        .init(color: AppColors.parchment.opacity(0), location: 0),
-                        .init(color: AppColors.parchment.opacity(0.85), location: 0.4),
-                        .init(color: AppColors.parchment, location: 1.0)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
         }
     }
     
@@ -1290,7 +1354,7 @@ struct LobbyWaitingView: View {
                     let spacing: CGFloat = 12
                     let availableWidth = geometry.size.width - (horizontalPadding * 2)
                     let itemWidth = (availableWidth - spacing) / 2
-                    let cardHeight = itemWidth * (1413.0 / 1143.0)
+                    let cardHeight = itemWidth * (1.0 / CharacterAvatar.cardAspectRatio)
                     
                     let columns = [
                         GridItem(.fixed(itemWidth), spacing: spacing),
@@ -1323,8 +1387,8 @@ struct LobbyWaitingView: View {
                 // Start button (host only)
                 if firebase.isHost {
                     VStack(spacing: 8) {
-                        if firebase.players.count < 3 {
-                            Text("Minst 3 spelare krävs")
+                        if firebase.players.count < 2 {
+                            Text("Minst 2 spelare krävs")
                                 .font(.custom("Georgia-Italic", size: 12))
                                 .foregroundColor(AppColors.inkMedium)
                         }
@@ -1351,11 +1415,11 @@ struct LobbyWaitingView: View {
                             .padding(.vertical, 14)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(firebase.players.count >= 3 ? AppColors.warmBrown : AppColors.inkMedium.opacity(0.3))
+                                    .fill(firebase.players.count >= 2 ? AppColors.warmBrown : AppColors.inkMedium.opacity(0.3))
                                     .shadow(color: AppColors.inkDark.opacity(0.15), radius: 4, y: 2)
                             )
                         }
-                        .disabled(firebase.players.count < 3 || isStarting)
+                        .disabled(firebase.players.count < 2 || isStarting)
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
@@ -1401,6 +1465,163 @@ struct LobbyWaitingView: View {
     }
 }
 
+// MARK: - Character Confirmation View (Full Screen)
+
+struct CharacterConfirmationOverlay: View {
+    let avatar: CharacterAvatar
+    let isLoading: Bool
+    let confirmButtonText: String
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+    
+    @State private var imageScale: CGFloat = 0.85
+    @State private var imageOpacity: Double = 0
+    @State private var contentOpacity: Double = 0
+    
+    var body: some View {
+        ZStack {
+            // Full screen parchment background
+            AppColors.parchment
+                .ignoresSafeArea(.all)
+            
+            // Subtle texture
+            Image("egg-shell")
+                .resizable(resizingMode: .tile)
+                .opacity(0.4)
+                .ignoresSafeArea(.all)
+            
+            VStack(spacing: 0) {
+                // Close button at top right
+                HStack {
+                    Spacer()
+                    
+                    Button(action: {
+                        if !isLoading {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                imageScale = 0.85
+                                imageOpacity = 0
+                                contentOpacity = 0
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                onCancel()
+                            }
+                        }
+                    }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(AppColors.inkMedium)
+                            .frame(width: 36, height: 36)
+                            .background(
+                                Circle()
+                                    .fill(AppColors.warmBrown.opacity(0.1))
+                            )
+                    }
+                    .disabled(isLoading)
+                }
+                .padding(.horizontal, AppSpacing.lg)
+                .padding(.top, AppSpacing.xl)
+                .opacity(contentOpacity)
+                
+                Spacer()
+                
+                // Character image - centered and prominent
+                Image(avatar.imageName)
+                    .resizable()
+                    .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fit)
+                    .frame(maxWidth: 280)
+                    .shadow(color: .black.opacity(0.15), radius: 20, y: 10)
+                    .scaleEffect(imageScale)
+                    .opacity(imageOpacity)
+                
+                Spacer()
+                    .frame(height: AppSpacing.xxl)
+                
+                // Character name
+                Text(avatar.displayName)
+                    .font(AppFonts.displayLarge())
+                    .foregroundColor(AppColors.inkDark)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, AppSpacing.xl)
+                    .opacity(contentOpacity)
+                
+                Spacer()
+                    .frame(height: AppSpacing.md)
+                
+                OrnamentDivider(width: 100, color: AppColors.warmBrown.opacity(0.4))
+                    .opacity(contentOpacity)
+                
+                Spacer()
+                
+                // Confirm button - medieval panel style
+                Button(action: onConfirm) {
+                    ZStack {
+                        // Panel background
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color(hex: "f5edd8"))
+                            .shadow(color: Color.black.opacity(0.12), radius: 4, y: 3)
+                        
+                        // Double border
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(AppColors.warmBrown.opacity(0.6), lineWidth: 1.5)
+                        
+                        // Inner border
+                        RoundedRectangle(cornerRadius: 2)
+                            .stroke(AppColors.warmBrown.opacity(0.2), lineWidth: 0.5)
+                            .padding(4)
+                        
+                        // Corner ornaments
+                        VStack {
+                            HStack {
+                                CornerOrnamentSmall()
+                                Spacer()
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(90))
+                            }
+                            Spacer()
+                            HStack {
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(-90))
+                                Spacer()
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(180))
+                            }
+                        }
+                        .padding(6)
+                        
+                        // Content
+                        HStack(spacing: AppSpacing.sm) {
+                            if isLoading {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: AppColors.inkDark))
+                            } else {
+                                Text(confirmButtonText)
+                                    .font(.custom("Georgia-Bold", size: 18))
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 14, weight: .semibold))
+                            }
+                        }
+                        .foregroundColor(AppColors.inkDark)
+                    }
+                    .frame(height: 56)
+                }
+                .disabled(isLoading)
+                .padding(.horizontal, AppSpacing.xl)
+                .padding(.bottom, AppSpacing.xxl)
+                .opacity(contentOpacity)
+            }
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                imageScale = 1.0
+                imageOpacity = 1.0
+            }
+            withAnimation(.easeOut(duration: 0.4).delay(0.1)) {
+                contentOpacity = 1.0
+            }
+        }
+    }
+}
+
 // MARK: - Online Player Card
 
 // MARK: - Lobby Player Card (Grid Style)
@@ -1417,7 +1638,7 @@ struct LobbyPlayerCard: View {
         VStack(spacing: 8) {
             // Character card image
             ZStack(alignment: .topTrailing) {
-                Image(player.avatarId)
+                Image(player.avatar?.imageName ?? player.avatarId)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: cardWidth, height: cardHeight)
@@ -1507,7 +1728,7 @@ struct OnlinePlayerCard: View {
     var body: some View {
         HStack(spacing: AppSpacing.md) {
             // Avatar
-            Image(player.avatarId)
+            Image(player.avatar?.imageName ?? player.avatarId)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 50, height: 60)
@@ -1595,83 +1816,128 @@ struct OnlineRoleRevealView: View {
     @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
     @State private var isCardFlipped = false
     @State private var showingCard = false
+    @State private var showHelp = false
     
     var myRole: PlayerRole {
         firebase.getMyRole() ?? .frisk
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Title
-            VStack(spacing: AppSpacing.sm) {
-                Text("Din Roll")
-                    .font(AppFonts.displayMedium())
-                    .foregroundColor(AppColors.inkDark)
+        ZStack {
+            VStack(spacing: 0) {
+                // Title
+                VStack(spacing: AppSpacing.sm) {
+                    Text("Din Roll")
+                        .font(AppFonts.displayMedium())
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    OrnamentDivider(width: 120, color: AppColors.warmBrown)
+                }
+                .padding(.top, AppSpacing.xxl * 1.5)
                 
-                OrnamentDivider(width: 120, color: AppColors.warmBrown)
-            }
-            .padding(.top, AppSpacing.xxl * 1.5)
-            
-            Spacer()
-            
-            // Card area
-            if showingCard {
-                RoleFlipCard(
-                    role: myRole,
-                    isFlipped: $isCardFlipped
-                )
-            } else {
-                // Tap to reveal
-                VStack(spacing: AppSpacing.lg) {
-                    Image(systemName: "hand.tap.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(AppColors.warmBrown)
-                    
-                    Text("Tryck för att se din roll")
-                        .font(AppFonts.headingMedium())
-                        .foregroundColor(AppColors.inkMedium)
-                    
-                    Text("Endast du kan se detta")
-                        .font(AppFonts.caption())
-                        .foregroundColor(AppColors.inkMedium.opacity(0.7))
-                }
-                .onTapGesture {
-                    SoundManager.shared.playClick()
-                    withAnimation(.spring(response: 0.5)) {
-                        showingCard = true
-                    }
-                }
-            }
-            
-            Spacer()
-            
-            // Continue button
-            if isCardFlipped {
-                Button(action: {
-                    SoundManager.shared.playClick()
-                    onContinue()
-                }) {
-                    HStack {
-                        Text("Jag Förstår")
-                            .font(AppFonts.headingSmall())
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 16, weight: .bold))
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, AppSpacing.md)
-                    .background(
-                        RoundedRectangle(cornerRadius: AppRadius.md)
-                            .fill(AppColors.royalBlue)
-                            .shadow(color: AppColors.inkDark.opacity(0.2), radius: 4, y: 2)
+                Spacer()
+                
+                // Card area
+                if showingCard {
+                    RoleFlipCard(
+                        role: myRole,
+                        isFlipped: $isCardFlipped
                     )
+                } else {
+                    // Tap to reveal
+                    VStack(spacing: AppSpacing.lg) {
+                        Image(systemName: "hand.tap.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(AppColors.warmBrown)
+                        
+                        Text("Tryck för att se din roll")
+                            .font(AppFonts.headingMedium())
+                            .foregroundColor(AppColors.inkMedium)
+                        
+                        Text("Endast du kan se detta")
+                            .font(AppFonts.caption())
+                            .foregroundColor(AppColors.inkMedium.opacity(0.7))
+                    }
+                    .onTapGesture {
+                        SoundManager.shared.playClick()
+                        withAnimation(.spring(response: 0.5)) {
+                            showingCard = true
+                        }
+                    }
                 }
-                .padding(.horizontal, AppSpacing.xl)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                
+                Spacer()
+                
+                // Continue button - medieval style
+                if isCardFlipped {
+                    Button(action: {
+                        SoundManager.shared.playClick()
+                        onContinue()
+                    }) {
+                        HStack {
+                            Text("Jag Förstår")
+                                .font(.custom("Georgia-Bold", size: 16))
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            Capsule()
+                                .fill(AppColors.warmBrown)
+                                .shadow(color: AppColors.inkDark.opacity(0.2), radius: 4, y: 2)
+                        )
+                    }
+                    .padding(.horizontal, AppSpacing.xl)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+                
+                Spacer()
+                    .frame(height: AppSpacing.xxl)
             }
             
-            Spacer()
-                .frame(height: AppSpacing.xxl)
+            // Help button
+            VStack {
+                HStack {
+                    Spacer()
+                    HelpButton(showHelp: $showHelp)
+                        .padding(.trailing, 16)
+                        .padding(.top, 16)
+                }
+                Spacer()
+            }
+            
+            // Help overlay
+            if showHelp {
+                HelpOverlay(
+                    content: getRoleRevealHelp(),
+                    onDismiss: { showHelp = false }
+                )
+            }
+        }
+    }
+    
+    private func getRoleRevealHelp() -> HelpContent {
+        switch myRole {
+        case .smittobarare:
+            return HelpContent(
+                title: "Du är Råttmannen",
+                body: "Du bär på pesten och ditt mål är att smitta alla andra spelare utan att bli avslöjad. Under röstningen väljer du vem du vill smitta - din röst räknas inte för uträkning!",
+                tip: "Agera som om du vore frisk. Rösta och diskutera som alla andra. Misstänkliggör andra för att avleda uppmärksamheten."
+            )
+        case .frisk:
+            return HelpContent(
+                title: "Du är Frisk",
+                body: "Ditt mål är att identifiera och förvisa Råttmannen innan alla blir smittade. Diskutera med andra och rösta ut den du misstänker mest.",
+                tip: "Håll koll på vem som agerar misstänkt. Samarbeta med andra friska för att hitta Råttmannen."
+            )
+        case .infekterad:
+            return HelpContent(
+                title: "Du är Smittad",
+                body: "Du har blivit smittad av Råttmannen, men du spelar fortfarande för de friskas lag. Om Läkaren botar dig blir du frisk igen.",
+                tip: "Försök få Läkaren att bota dig utan att avslöja för Råttmannen att du vet."
+            )
         }
     }
 }
@@ -1702,7 +1968,7 @@ struct OnlinePlayingView: View {
             VStack(spacing: AppSpacing.md) {
                 ForEach(firebase.players) { player in
                     HStack {
-                        Image(player.avatarId)
+                        Image(player.avatar?.imageName ?? player.avatarId)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 40, height: 50)
@@ -1945,6 +2211,1847 @@ struct ErrorBanner: View {
         )
         .padding(.horizontal, AppSpacing.lg)
         .padding(.top, AppSpacing.xxl)
+    }
+}
+
+// MARK: - Online Round View
+
+struct OnlineRoundView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var showHelp = false
+    
+    var body: some View {
+        ZStack {
+            // Background
+            AppColors.parchment
+                .ignoresSafeArea()
+            
+            Image("egg-shell")
+                .resizable(resizingMode: .tile)
+                .ignoresSafeArea()
+            
+            DustParticlesView()
+                .ignoresSafeArea()
+            
+            // Content based on round sub-phase
+            switch firebase.currentLobby?.roundSubPhase ?? .diceRoll {
+            case .diceRoll:
+                OnlineDiceRollView()
+            case .diceEvent:
+                OnlineDiceEventView()
+            case .protection:
+                OnlineProtectionPhaseView()
+            case .cure:
+                // Skip if blackout
+                if firebase.currentLobby?.skipCurePhase == true {
+                    OnlineBlackoutSkipView()
+                } else {
+                    OnlineCurePhaseView()
+                }
+            case .voting:
+                OnlineVotingPhaseView()
+            case .resolution:
+                OnlineResolutionPhaseView()
+            }
+            
+            // Help button
+            VStack {
+                HStack {
+                    Spacer()
+                    HelpButton(showHelp: $showHelp)
+                        .padding(.trailing, 16)
+                        .padding(.top, 16)
+                }
+                Spacer()
+            }
+            
+            // Help overlay
+            if showHelp {
+                HelpOverlay(
+                    content: getHelpContent(),
+                    onDismiss: { showHelp = false }
+                )
+            }
+        }
+    }
+    
+    private func getHelpContent() -> HelpContent {
+        let subPhase = firebase.currentLobby?.roundSubPhase ?? .protection
+        let isRattmannen = firebase.isRattmannen
+        
+        switch subPhase {
+        case .diceRoll:
+            return HelpContent(
+                title: "Tärningskast",
+                body: "Tärningarna kastas för att avgöra vilken händelse som påverkar denna runda.",
+                tip: "Vänta på resultatet."
+            )
+            
+        case .diceEvent:
+            return HelpContent(
+                title: "Tärningshändelse",
+                body: "En speciell händelse aktiveras baserat på tärningsresultatet. Detta kan påverka rundan på olika sätt.",
+                tip: "Läs händelsen noggrant."
+            )
+            
+        case .protection:
+            if firebase.isVaktare {
+                return HelpContent(
+                    title: "Skydda En Spelare",
+                    body: "Du är Väktaren. Välj en spelare att skydda denna runda. Den skyddade spelaren kan inte röstas ut och kan inte smittas av Råttmannen.",
+                    tip: "Du kan inte skydda dig själv. Skyddet gäller bara denna runda."
+                )
+            } else {
+                return HelpContent(
+                    title: "Väktarens Val",
+                    body: "Väktaren väljer vem som ska skyddas denna runda. Den skyddade spelaren kan varken röstas ut eller smittas.",
+                    tip: "Vänta på Väktarens beslut."
+                )
+            }
+            
+        case .cure:
+            if firebase.isLakare {
+                return HelpContent(
+                    title: "Bota En Spelare",
+                    body: "Du är Läkaren. Du kan välja att bota en spelare som du misstänker är smittad. Om boten lyckas blir spelaren frisk igen.",
+                    tip: "Du kan inte bota dig själv. Du kan också hoppa över."
+                )
+            } else if isRattmannen {
+                return HelpContent(
+                    title: "Läkarens Val",
+                    body: "Läkaren väljer vem som ska botas. Om de botar en av dina smittade... blir den spelaren frisk igen. Hoppas de väljer fel!"
+                )
+            } else {
+                return HelpContent(
+                    title: "Läkarens Val",
+                    body: "Läkaren väljer om någon ska botas denna runda. Om läkaren väljer rätt spelare kan en smittad person bli frisk igen.",
+                    tip: "Vänta på Läkarens beslut."
+                )
+            }
+            
+        case .voting:
+            if isRattmannen {
+                return HelpContent(
+                    title: "Infektera & Rösta",
+                    body: "Din röst räknas INTE för uträkning. Istället blir den du 'röstar' på smittad! Välj strategiskt - försök inte infektera någon som ändå kommer röstas ut.",
+                    tip: "Du kan inte smitta den skyddade spelaren. Överväg vem som har störst chans att överleva."
+                )
+            } else {
+                return HelpContent(
+                    title: "Rösta Ut En Spelare",
+                    body: "Rösta för vem du vill ska förvisas från byn. Den med flest röster förvisas. Vid lika röster förvisas ingen.",
+                    tip: "Den skyddade spelaren kan inte röstas ut. Försök identifiera Råttmannen."
+                )
+            }
+            
+        case .resolution:
+            return HelpContent(
+                title: "Rundans Resultat",
+                body: "Se vad som hände denna runda. Vem förvisades? Lyckades läkarens bot? Fortsätt sedan till nästa runda."
+            )
+        }
+    }
+}
+
+// MARK: - Protection Phase View
+
+struct OnlineProtectionPhaseView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var selectedPlayer: OnlinePlayer?
+    @State private var showConfirmation = false
+    @State private var isSubmitting = false
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            phaseHeader
+            
+            if firebase.isVaktare {
+                // Väktare selects protection target
+                ScrollView {
+                    VStack(spacing: AppSpacing.lg) {
+                        Text("Välj vem du vill skydda")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                        
+                        OnlineVotingGrid(
+                            players: firebase.protectionTargets,
+                            selectedId: selectedPlayer?.oderId,
+                            onSelect: { player in
+                                selectedPlayer = player
+                                showConfirmation = true
+                            }
+                        )
+                        .padding(.horizontal)
+                    }
+                    .padding(.vertical, AppSpacing.lg)
+                }
+            } else {
+                // Other players wait
+                VStack(spacing: AppSpacing.lg) {
+                    Spacer()
+                    
+                    ProgressView()
+                        .scaleEffect(1.2)
+                        .tint(AppColors.warmBrown)
+                    
+                    Text("Väktaren väljer...")
+                        .font(.custom("Georgia", size: 16))
+                        .foregroundColor(AppColors.inkMedium)
+                    
+                    if let vaktare = firebase.getVaktare() {
+                        Text("\(vaktare.name) bestämmer vem som ska skyddas")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium.opacity(0.7))
+                    }
+                    
+                    Spacer()
+                }
+            }
+        }
+        .overlay {
+            if showConfirmation, let player = selectedPlayer {
+                OnlineActionConfirmation(
+                    title: "Skydda \(player.name)?",
+                    subtitle: "Denna spelare skyddas från förvising och smitta denna runda",
+                    player: player,
+                    iconName: "guard",
+                    confirmText: "Skydda",
+                    isSubmitting: isSubmitting,
+                    onConfirm: {
+                        Task {
+                            isSubmitting = true
+                            try? await firebase.vaktareProtect(playerId: player.oderId)
+                            isSubmitting = false
+                            showConfirmation = false
+                        }
+                    },
+                    onCancel: {
+                        showConfirmation = false
+                        selectedPlayer = nil
+                    }
+                )
+            }
+        }
+    }
+    
+    private var phaseHeader: some View {
+        VStack(spacing: 8) {
+            Text("Runda \(firebase.currentLobby?.round ?? 1)")
+                .font(.custom("Georgia", size: 14))
+                .foregroundColor(AppColors.inkMedium)
+            
+            Image("guard")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 80)
+            
+            OrnamentalDivider()
+            
+            Text("Väktarens Val")
+                .font(.custom("Georgia-Bold", size: 24))
+                .foregroundColor(AppColors.inkDark)
+            
+            Text("Skydda en bybo")
+                .font(.custom("Georgia-Italic", size: 14))
+                .foregroundColor(AppColors.inkMedium)
+            
+            OrnamentalDivider()
+        }
+        .padding(.top, AppSpacing.lg)
+    }
+}
+
+// MARK: - Cure Phase View
+
+struct OnlineCurePhaseView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var selectedPlayer: OnlinePlayer?
+    @State private var showConfirmation = false
+    @State private var isSubmitting = false
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            phaseHeader
+            
+            // Show who is protected
+            if let protectedName = firebase.currentLobby?.protectedPlayerId,
+               let protectedPlayer = firebase.players.first(where: { $0.oderId == protectedName }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "shield.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(AppColors.oliveGreen)
+                    Text("\(protectedPlayer.name) är skyddad")
+                        .font(.custom("Georgia-Italic", size: 13))
+                        .foregroundColor(AppColors.oliveGreen)
+                }
+                .padding(.vertical, 8)
+            }
+            
+            if firebase.isLakare {
+                // Läkare selects cure target
+                ScrollView {
+                    VStack(spacing: AppSpacing.lg) {
+                        Text("Välj vem du vill försöka bota")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                        
+                        OnlineVotingGrid(
+                            players: firebase.cureTargets,
+                            selectedId: selectedPlayer?.oderId,
+                            onSelect: { player in
+                                selectedPlayer = player
+                                showConfirmation = true
+                            }
+                        )
+                        .padding(.horizontal)
+                        
+                        // Skip button
+                        Button(action: {
+                            Task {
+                                try? await firebase.lakareSkip()
+                            }
+                        }) {
+                            Text("Hoppa över")
+                                .font(.custom("Georgia", size: 14))
+                                .foregroundColor(AppColors.inkMedium)
+                                .underline()
+                        }
+                        .padding(.top, AppSpacing.md)
+                    }
+                    .padding(.vertical, AppSpacing.lg)
+                }
+            } else {
+                // Other players wait
+                VStack(spacing: AppSpacing.lg) {
+                    Spacer()
+                    
+                    ProgressView()
+                        .scaleEffect(1.2)
+                        .tint(AppColors.warmBrown)
+                    
+                    Text("Läkaren väljer...")
+                        .font(.custom("Georgia", size: 16))
+                        .foregroundColor(AppColors.inkMedium)
+                    
+                    if let lakare = firebase.getLakare() {
+                        Text("\(lakare.name) bestämmer om någon ska botas")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium.opacity(0.7))
+                    }
+                    
+                    Spacer()
+                }
+            }
+        }
+        .overlay {
+            if showConfirmation, let player = selectedPlayer {
+                OnlineActionConfirmation(
+                    title: "Bota \(player.name)?",
+                    subtitle: "Om spelaren är smittad blir den frisk. Annars händer inget.",
+                    player: player,
+                    iconName: "doctor",
+                    confirmText: "Bota",
+                    isSubmitting: isSubmitting,
+                    onConfirm: {
+                        Task {
+                            isSubmitting = true
+                            try? await firebase.lakareCure(playerId: player.oderId)
+                            isSubmitting = false
+                            showConfirmation = false
+                        }
+                    },
+                    onCancel: {
+                        showConfirmation = false
+                        selectedPlayer = nil
+                    }
+                )
+            }
+        }
+    }
+    
+    private var phaseHeader: some View {
+        VStack(spacing: 8) {
+            Text("Runda \(firebase.currentLobby?.round ?? 1)")
+                .font(.custom("Georgia", size: 14))
+                .foregroundColor(AppColors.inkMedium)
+            
+            Image("doctor")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 80)
+            
+            OrnamentalDivider()
+            
+            Text("Läkarens Val")
+                .font(.custom("Georgia-Bold", size: 24))
+                .foregroundColor(AppColors.inkDark)
+            
+            Text("Bota en bybo")
+                .font(.custom("Georgia-Italic", size: 14))
+                .foregroundColor(AppColors.inkMedium)
+            
+            OrnamentalDivider()
+        }
+        .padding(.top, AppSpacing.lg)
+    }
+}
+
+// MARK: - Voting Phase View
+
+struct OnlineVotingPhaseView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var selectedPlayer: OnlinePlayer?
+    @State private var showConfirmation = false
+    @State private var isSubmitting = false
+    
+    var hasVoted: Bool {
+        firebase.hasVotedInRound()
+    }
+    
+    var amIQuarantined: Bool {
+        firebase.amIQuarantined
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            phaseHeader
+            
+            // Show quarantined players
+            if !(firebase.currentLobby?.quarantinedPlayerIds.isEmpty ?? true) {
+                let quarantinedNames = firebase.currentLobby?.quarantinedPlayerIds.compactMap { id in
+                    firebase.players.first { $0.oderId == id }?.name
+                } ?? []
+                HStack(spacing: 6) {
+                    Image(systemName: "person.2.slash")
+                        .font(.system(size: 12))
+                        .foregroundColor(AppColors.warning)
+                    Text("I karantän: \(quarantinedNames.joined(separator: ", "))")
+                        .font(.custom("Georgia-Italic", size: 13))
+                        .foregroundColor(AppColors.warning)
+                }
+                .padding(.vertical, 4)
+            }
+            
+            // Show protected player
+            if let protectedId = firebase.currentLobby?.protectedPlayerId,
+               let protectedPlayer = firebase.players.first(where: { $0.oderId == protectedId }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "shield.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(AppColors.oliveGreen)
+                    Text("\(protectedPlayer.name) är skyddad och kan inte röstas ut")
+                        .font(.custom("Georgia-Italic", size: 13))
+                        .foregroundColor(AppColors.oliveGreen)
+                }
+                .padding(.vertical, 8)
+            }
+            
+            // Show cure result (if not skipped due to blackout)
+            if firebase.currentLobby?.skipCurePhase != true,
+               let cureResult = firebase.currentLobby?.cureResult,
+               let cureTargetId = firebase.currentLobby?.cureTargetId,
+               let curedPlayer = firebase.players.first(where: { $0.oderId == cureTargetId }) {
+                HStack(spacing: 6) {
+                    Image(systemName: cureResult == "success" ? "checkmark.circle.fill" : "xmark.circle")
+                        .font(.system(size: 12))
+                        .foregroundColor(cureResult == "success" ? AppColors.oliveGreen : AppColors.inkMedium)
+                    Text(cureResult == "success" 
+                         ? "\(curedPlayer.name) botades!"
+                         : "Läkaren försökte bota \(curedPlayer.name) - inget hände")
+                        .font(.custom("Georgia-Italic", size: 13))
+                        .foregroundColor(cureResult == "success" ? AppColors.oliveGreen : AppColors.inkMedium)
+                }
+                .padding(.vertical, 4)
+            }
+            
+            // Check if quarantined
+            if amIQuarantined {
+                // Quarantined view
+                VStack(spacing: AppSpacing.lg) {
+                    Spacer()
+                    
+                    Image(systemName: "speaker.slash.fill")
+                        .font(.system(size: 64))
+                        .foregroundColor(AppColors.warning.opacity(0.7))
+                    
+                    Text("Du är i karantän")
+                        .font(.custom("Georgia-Bold", size: 24))
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    Text("Du får inte prata eller rösta denna runda")
+                        .font(.custom("Georgia-Italic", size: 14))
+                        .foregroundColor(AppColors.inkMedium)
+                        .multilineTextAlignment(.center)
+                    
+                    // Vote progress
+                    let totalVotes = firebase.currentLobby?.roundVotes.count ?? 0
+                    let expectedVotes = firebase.eligibleVoters.count
+                    Text("\(totalVotes) av \(expectedVotes) har röstat")
+                        .font(.custom("Georgia", size: 12))
+                        .foregroundColor(AppColors.inkMedium.opacity(0.7))
+                        .padding(.top, AppSpacing.md)
+                    
+                    Spacer()
+                }
+            } else if hasVoted {
+                // Waiting for others
+                VStack(spacing: AppSpacing.lg) {
+                    Spacer()
+                    
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(AppColors.oliveGreen)
+                    
+                    Text("Din röst är lagd")
+                        .font(.custom("Georgia-Bold", size: 20))
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    Text("Väntar på övriga spelare...")
+                        .font(.custom("Georgia-Italic", size: 14))
+                        .foregroundColor(AppColors.inkMedium)
+                    
+                    // Vote progress (use eligible voters, not all alive)
+                    let totalVotes = firebase.currentLobby?.roundVotes.count ?? 0
+                    let expectedVotes = firebase.eligibleVoters.count
+                    Text("\(totalVotes) av \(expectedVotes) har röstat")
+                        .font(.custom("Georgia", size: 12))
+                        .foregroundColor(AppColors.inkMedium.opacity(0.7))
+                    
+                    Spacer()
+                }
+            } else {
+                // Vote selection
+                ScrollView {
+                    VStack(spacing: AppSpacing.lg) {
+                        if firebase.isRattmannen {
+                            Text("Välj vem du vill smittas")
+                                .font(.custom("Georgia-Italic", size: 14))
+                                .foregroundColor(AppColors.error)
+                        } else {
+                            Text("Välj vem som ska förvisas")
+                                .font(.custom("Georgia-Italic", size: 14))
+                                .foregroundColor(AppColors.inkMedium)
+                        }
+                        
+                        OnlineVotingGrid(
+                            players: firebase.votableTargets,
+                            selectedId: selectedPlayer?.oderId,
+                            onSelect: { player in
+                                selectedPlayer = player
+                                showConfirmation = true
+                            }
+                        )
+                        .padding(.horizontal)
+                    }
+                    .padding(.vertical, AppSpacing.lg)
+                }
+            }
+        }
+        .overlay {
+            if showConfirmation, let player = selectedPlayer {
+                OnlineActionConfirmation(
+                    title: firebase.isRattmannen ? "Smitta \(player.name)?" : "Rösta ut \(player.name)?",
+                    subtitle: firebase.isRattmannen 
+                        ? "Din röst räknas inte för uträkning - istället smittas denna spelare"
+                        : "Du röstar för att förvisa denna spelare från byn",
+                    player: player,
+                    iconName: firebase.isRattmannen ? "smittobarare" : nil,
+                    confirmText: firebase.isRattmannen ? "Smitta" : "Rösta",
+                    isSubmitting: isSubmitting,
+                    onConfirm: {
+                        Task {
+                            isSubmitting = true
+                            try? await firebase.castRoundVote(forPlayerId: player.oderId)
+                            isSubmitting = false
+                            showConfirmation = false
+                        }
+                    },
+                    onCancel: {
+                        showConfirmation = false
+                        selectedPlayer = nil
+                    }
+                )
+            }
+        }
+    }
+    
+    private var phaseHeader: some View {
+        VStack(spacing: 8) {
+            Text("Runda \(firebase.currentLobby?.round ?? 1)")
+                .font(.custom("Georgia", size: 14))
+                .foregroundColor(AppColors.inkMedium)
+            
+            Image(systemName: "hand.raised.fill")
+                .font(.system(size: 48))
+                .foregroundColor(AppColors.warmBrown)
+            
+            OrnamentalDivider()
+            
+            Text(firebase.isRattmannen ? "Infektera" : "Förvisning")
+                .font(.custom("Georgia-Bold", size: 24))
+                .foregroundColor(AppColors.inkDark)
+            
+            Text(firebase.isRattmannen ? "Välj ditt offer" : "Rösta ut en misstänkt")
+                .font(.custom("Georgia-Italic", size: 14))
+                .foregroundColor(AppColors.inkMedium)
+            
+            OrnamentalDivider()
+        }
+        .padding(.top, AppSpacing.lg)
+    }
+}
+
+// MARK: - Resolution Phase View
+
+struct OnlineResolutionPhaseView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var showResults = false
+    @State private var isStartingNextRound = false
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            VStack(spacing: 8) {
+                Text("Runda \(firebase.currentLobby?.round ?? 1)")
+                    .font(.custom("Georgia", size: 14))
+                    .foregroundColor(AppColors.inkMedium)
+                
+                Image(systemName: "scroll.fill")
+                    .font(.system(size: 48))
+                    .foregroundColor(AppColors.warmBrown)
+                
+                OrnamentalDivider()
+                
+                Text("Resultat")
+                    .font(.custom("Georgia-Bold", size: 24))
+                    .foregroundColor(AppColors.inkDark)
+                
+                OrnamentalDivider()
+            }
+            .padding(.top, AppSpacing.lg)
+            
+            ScrollView {
+                VStack(spacing: AppSpacing.xl) {
+                    // Vote results
+                    VStack(spacing: AppSpacing.md) {
+                        Text("Röstresultat")
+                            .font(.custom("Georgia-Bold", size: 18))
+                            .foregroundColor(AppColors.inkDark)
+                        
+                        let voteCounts = firebase.getVoteCounts()
+                        ForEach(voteCounts, id: \.player.oderId) { item in
+                            HStack {
+                                if let avatar = item.player.avatar {
+                                    Image(avatar.imageName)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 40, height: 40)
+                                        .clipShape(Circle())
+                                }
+                                
+                                Text(item.player.name)
+                                    .font(.custom("Georgia", size: 16))
+                                    .foregroundColor(AppColors.inkDark)
+                                
+                                Spacer()
+                                
+                                Text("\(item.count) röst\(item.count == 1 ? "" : "er")")
+                                    .font(.custom("Georgia-Bold", size: 14))
+                                    .foregroundColor(
+                                        item.player.oderId == firebase.currentLobby?.exiledPlayerId
+                                            ? AppColors.error
+                                            : AppColors.inkMedium
+                                    )
+                            }
+                            .padding(.horizontal)
+                        }
+                        
+                        if voteCounts.isEmpty {
+                            Text("Ingen fick några röster")
+                                .font(.custom("Georgia-Italic", size: 14))
+                                .foregroundColor(AppColors.inkMedium)
+                        }
+                    }
+                    
+                    // Exile result
+                    if let exiledId = firebase.currentLobby?.exiledPlayerId,
+                       let exiledPlayer = firebase.players.first(where: { $0.oderId == exiledId }) {
+                        VStack(spacing: AppSpacing.sm) {
+                            Text("Förvisad")
+                                .font(.custom("Georgia-Bold", size: 16))
+                                .foregroundColor(AppColors.error)
+                            
+                            if let avatar = exiledPlayer.avatar {
+                                Image(avatar.imageName)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 80, height: 80)
+                                    .clipShape(Circle())
+                                    .overlay(
+                                        Circle()
+                                            .stroke(AppColors.error.opacity(0.5), lineWidth: 3)
+                                    )
+                                    .saturation(0.5)
+                            }
+                            
+                            Text(exiledPlayer.name)
+                                .font(.custom("Georgia-Bold", size: 18))
+                                .foregroundColor(AppColors.inkDark)
+                            
+                            // Show their role
+                            if let role = exiledPlayer.secretRole {
+                                Text("var \(role == .smittobarare ? "Råttmannen!" : (role == .infekterad ? "Smittad" : "Frisk"))")
+                                    .font(.custom("Georgia-Italic", size: 14))
+                                    .foregroundColor(role == .smittobarare ? AppColors.error : AppColors.inkMedium)
+                            }
+                        }
+                    } else {
+                        Text("Ingen förvisades denna runda")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                            .padding(.vertical, AppSpacing.md)
+                    }
+                    
+                    // Continue button (host only)
+                    if firebase.isHost {
+                        Button(action: {
+                            Task {
+                                isStartingNextRound = true
+                                // First resolve round (apply infection, check win)
+                                try? await firebase.resolveRound()
+                                // Then start next round if game continues
+                                if firebase.currentLobby?.gamePhase == .round {
+                                    try? await firebase.startNextRound()
+                                }
+                                isStartingNextRound = false
+                            }
+                        }) {
+                            HStack(spacing: 8) {
+                                if isStartingNextRound {
+                                    ProgressView()
+                                        .tint(.white)
+                                }
+                                Text("Fortsätt")
+                                    .font(.custom("Georgia-Bold", size: 16))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 32)
+                            .padding(.vertical, 14)
+                            .background(
+                                Capsule()
+                                    .fill(AppColors.warmBrown)
+                            )
+                        }
+                        .disabled(isStartingNextRound)
+                        .padding(.top, AppSpacing.lg)
+                    } else {
+                        Text("Väntar på att värden fortsätter...")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                            .padding(.top, AppSpacing.lg)
+                    }
+                }
+                .padding(.vertical, AppSpacing.xl)
+            }
+        }
+    }
+}
+
+// MARK: - Online Dice Roll View
+
+struct OnlineDiceRollView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var diceResult: Int? = nil
+    @State private var isRolling = false
+    @State private var showResult = false
+    
+    var isMyTurn: Bool {
+        firebase.isCurrentRoller
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            VStack(spacing: 8) {
+                Text("Runda \(firebase.currentLobby?.round ?? 1)")
+                    .font(.custom("Georgia", size: 14))
+                    .foregroundColor(AppColors.inkMedium)
+                
+                Image(systemName: "dice.fill")
+                    .font(.system(size: 48))
+                    .foregroundColor(AppColors.warmBrown)
+                
+                OrnamentalDivider()
+                
+                Text("Ödet Avgör")
+                    .font(.custom("Georgia-Bold", size: 24))
+                    .foregroundColor(AppColors.inkDark)
+                
+                if let roller = firebase.currentRoller {
+                    Text(isMyTurn ? "Du kastar tärningarna" : "\(roller.name) kastar tärningarna")
+                        .font(.custom("Georgia-Italic", size: 14))
+                        .foregroundColor(AppColors.inkMedium)
+                }
+                
+                OrnamentalDivider()
+            }
+            .padding(.top, AppSpacing.lg)
+            
+            Spacer()
+            
+            // Dice area
+            if isMyTurn {
+                // Show 3D dice for roller
+                DiceSceneView(
+                    onResult: { result in
+                        diceResult = result
+                        showResult = true
+                        // Submit result to Firebase
+                        Task {
+                            try? await firebase.submitDiceResult(result: result)
+                        }
+                    },
+                    onRollStart: {
+                        isRolling = true
+                        showResult = false
+                    }
+                )
+                .frame(height: 300)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, AppSpacing.lg)
+                
+                Text("Tryck för att kasta")
+                    .font(.custom("Georgia-Italic", size: 14))
+                    .foregroundColor(AppColors.inkMedium)
+                    .padding(.top, AppSpacing.sm)
+            } else {
+                // Show waiting message for others
+                VStack(spacing: AppSpacing.lg) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                        .tint(AppColors.warmBrown)
+                    
+                    Text("Väntar på tärningskast...")
+                        .font(.custom("Georgia", size: 16))
+                        .foregroundColor(AppColors.inkMedium)
+                    
+                    if let roller = firebase.currentRoller {
+                        if let avatar = roller.avatar {
+                            Image(avatar.imageName)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 80, height: 100)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                        Text(roller.name)
+                            .font(.custom("Georgia-Bold", size: 16))
+                            .foregroundColor(AppColors.inkDark)
+                    }
+                }
+            }
+            
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Online Dice Event View
+
+struct OnlineDiceEventView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    
+    var diceEvent: GameLobby.DiceEventType? {
+        firebase.currentLobby?.diceEvent
+    }
+    
+    var body: some View {
+        if let event = diceEvent {
+            switch event {
+            case .antidote:
+                OnlineAntidoteEventView()
+            case .prophecy:
+                OnlineProphecyEventView()
+            case .quarantine:
+                OnlineQuarantineEventView()
+            case .blackout:
+                OnlineBlackoutEventView()
+            case .epidemic:
+                OnlineEpidemicEventView()
+            }
+        } else {
+            // Fallback - should not happen
+            VStack {
+                Text("Laddar händelse...")
+                    .font(.custom("Georgia", size: 16))
+                    .foregroundColor(AppColors.inkMedium)
+            }
+        }
+    }
+}
+
+// MARK: - Antidote Event View (2-3)
+
+struct OnlineAntidoteEventView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var selectedPlayer: OnlinePlayer?
+    @State private var showConfirmation = false
+    @State private var isSubmitting = false
+    @State private var cureResult: String?
+    
+    var isResolved: Bool {
+        firebase.currentLobby?.diceEventResolved ?? false
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            diceEventHeader(
+                icon: "cross.vial.fill",
+                title: "Motgift Funnet!",
+                subtitle: "Tärningarna visade \(firebase.currentLobby?.diceResult ?? 0)"
+            )
+            
+            if firebase.isCurrentRoller && !isResolved {
+                // Roller selects who to cure
+                ScrollView {
+                    VStack(spacing: AppSpacing.lg) {
+                        Text("Välj en spelare att bota omedelbart")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                        
+                        OnlineVotingGrid(
+                            players: firebase.alivePlayers,
+                            selectedId: selectedPlayer?.oderId,
+                            onSelect: { player in
+                                selectedPlayer = player
+                                showConfirmation = true
+                            }
+                        )
+                        .padding(.horizontal)
+                    }
+                    .padding(.vertical, AppSpacing.lg)
+                }
+            } else if isResolved {
+                // Show result
+                VStack(spacing: AppSpacing.lg) {
+                    Spacer()
+                    
+                    let result = firebase.currentLobby?.prophecyResult
+                    Image(systemName: result == "success" ? "checkmark.circle.fill" : "xmark.circle")
+                        .font(.system(size: 64))
+                        .foregroundColor(result == "success" ? AppColors.oliveGreen : AppColors.inkMedium)
+                    
+                    Text(result == "success" ? "Boten lyckades!" : "Spelaren var inte smittad")
+                        .font(.custom("Georgia-Bold", size: 20))
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    // Continue button
+                    if firebase.isCurrentRoller || firebase.isHost {
+                        continueButton()
+                    } else {
+                        Text("Väntar...")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                    }
+                    
+                    Spacer()
+                }
+            } else {
+                // Others wait
+                waitingView(message: "väntar på att motgiftet används...")
+            }
+        }
+        .overlay {
+            if showConfirmation, let player = selectedPlayer {
+                OnlineActionConfirmation(
+                    title: "Bota \(player.name)?",
+                    subtitle: "Motgiftet kommer användas omedelbart",
+                    player: player,
+                    iconName: "doctor",
+                    confirmText: "Bota",
+                    isSubmitting: isSubmitting,
+                    onConfirm: {
+                        Task {
+                            isSubmitting = true
+                            try? await firebase.handleAntidoteEvent(targetPlayerId: player.oderId)
+                            isSubmitting = false
+                            showConfirmation = false
+                        }
+                    },
+                    onCancel: {
+                        showConfirmation = false
+                        selectedPlayer = nil
+                    }
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Prophecy Event View (4-5)
+
+struct OnlineProphecyEventView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var selectedChoice: String?
+    @State private var selectedPlayer: OnlinePlayer?
+    @State private var isSubmitting = false
+    
+    var isResolved: Bool {
+        firebase.currentLobby?.diceEventResolved ?? false
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            diceEventHeader(
+                icon: "eye.fill",
+                title: "Spådom",
+                subtitle: "Tärningarna visade \(firebase.currentLobby?.diceResult ?? 0)"
+            )
+            
+            if firebase.isCurrentRoller && !isResolved {
+                // Roller chooses prophecy type
+                ScrollView {
+                    VStack(spacing: AppSpacing.xl) {
+                        Text("Välj din insikt")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                        
+                        if selectedChoice == nil {
+                            // Choice selection
+                            VStack(spacing: AppSpacing.md) {
+                                prophecyChoiceButton(
+                                    title: "Räkna Smittade",
+                                    description: "Lär dig hur många spelare som är smittade just nu",
+                                    action: {
+                                        Task {
+                                            isSubmitting = true
+                                            try? await firebase.handleProphecyChoice(type: "count")
+                                            isSubmitting = false
+                                        }
+                                    }
+                                )
+                                
+                                prophecyChoiceButton(
+                                    title: "Undersök En Person",
+                                    description: "Ta reda på om en specifik spelare är smittad",
+                                    action: {
+                                        selectedChoice = "investigate"
+                                    }
+                                )
+                            }
+                            .padding(.horizontal)
+                        } else {
+                            // Player selection for investigate
+                            Text("Välj vem du vill undersöka")
+                                .font(.custom("Georgia-Italic", size: 14))
+                                .foregroundColor(AppColors.inkMedium)
+                            
+                            OnlineVotingGrid(
+                                players: firebase.alivePlayers.filter { $0.oderId != firebase.userId },
+                                selectedId: selectedPlayer?.oderId,
+                                onSelect: { player in
+                                    Task {
+                                        isSubmitting = true
+                                        try? await firebase.handleProphecyChoice(type: "investigate", targetPlayerId: player.oderId)
+                                        isSubmitting = false
+                                    }
+                                }
+                            )
+                            .padding(.horizontal)
+                            
+                            Button("Tillbaka") {
+                                selectedChoice = nil
+                            }
+                            .font(.custom("Georgia", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                        }
+                    }
+                    .padding(.vertical, AppSpacing.lg)
+                }
+            } else if isResolved && firebase.isCurrentRoller {
+                // Show result only to roller
+                VStack(spacing: AppSpacing.lg) {
+                    Spacer()
+                    
+                    Image(systemName: "eye.circle.fill")
+                        .font(.system(size: 64))
+                        .foregroundColor(AppColors.warmBrown)
+                    
+                    if firebase.currentLobby?.prophecyType == "count" {
+                        Text("Antal smittade:")
+                            .font(.custom("Georgia", size: 16))
+                            .foregroundColor(AppColors.inkMedium)
+                        Text(firebase.currentLobby?.prophecyResult ?? "?")
+                            .font(.custom("Georgia-Bold", size: 48))
+                            .foregroundColor(AppColors.inkDark)
+                    } else {
+                        if let targetId = firebase.currentLobby?.prophecyTarget,
+                           let target = firebase.players.first(where: { $0.oderId == targetId }) {
+                            Text("\(target.name) är:")
+                                .font(.custom("Georgia", size: 16))
+                                .foregroundColor(AppColors.inkMedium)
+                            Text(firebase.currentLobby?.prophecyResult == "ja" ? "SMITTAD" : "FRISK")
+                                .font(.custom("Georgia-Bold", size: 32))
+                                .foregroundColor(firebase.currentLobby?.prophecyResult == "ja" ? AppColors.error : AppColors.oliveGreen)
+                        }
+                    }
+                    
+                    Text("Denna information är bara synlig för dig")
+                        .font(.custom("Georgia-Italic", size: 12))
+                        .foregroundColor(AppColors.inkMedium.opacity(0.7))
+                        .padding(.top, AppSpacing.sm)
+                    
+                    continueButton()
+                    
+                    Spacer()
+                }
+            } else if isResolved {
+                // Others see that prophecy was used
+                VStack(spacing: AppSpacing.lg) {
+                    Spacer()
+                    
+                    Image(systemName: "eye.slash.fill")
+                        .font(.system(size: 64))
+                        .foregroundColor(AppColors.inkMedium.opacity(0.5))
+                    
+                    Text("Spådomen är hemlig")
+                        .font(.custom("Georgia-Bold", size: 20))
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    if let roller = firebase.currentRoller {
+                        Text("\(roller.name) har fått en uppenbarelse")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                    }
+                    
+                    Text("Väntar...")
+                        .font(.custom("Georgia-Italic", size: 14))
+                        .foregroundColor(AppColors.inkMedium)
+                        .padding(.top, AppSpacing.lg)
+                    
+                    Spacer()
+                }
+            } else {
+                waitingView(message: "väntar på spådomen...")
+            }
+        }
+    }
+    
+    private func prophecyChoiceButton(title: String, description: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Text(title)
+                    .font(.custom("Georgia-Bold", size: 18))
+                    .foregroundColor(AppColors.inkDark)
+                Text(description)
+                    .font(.custom("Georgia", size: 13))
+                    .foregroundColor(AppColors.inkMedium)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(AppColors.parchment)
+                    .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(AppColors.warmBrown.opacity(0.3), lineWidth: 1)
+            )
+        }
+        .disabled(isSubmitting)
+    }
+}
+
+// MARK: - Quarantine Event View (6-8)
+
+struct OnlineQuarantineEventView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var selectedPlayers: [OnlinePlayer] = []
+    @State private var isSubmitting = false
+    
+    var isResolved: Bool {
+        firebase.currentLobby?.diceEventResolved ?? false
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            diceEventHeader(
+                icon: "lock.fill",
+                title: "Karantän!",
+                subtitle: "Tärningarna visade \(firebase.currentLobby?.diceResult ?? 0)"
+            )
+            
+            if firebase.isCurrentRoller && !isResolved {
+                // Roller selects 2 players
+                ScrollView {
+                    VStack(spacing: AppSpacing.lg) {
+                        Text("Välj 2 spelare att sätta i karantän")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                        
+                        Text("Valda: \(selectedPlayers.count)/2")
+                            .font(.custom("Georgia-Bold", size: 16))
+                            .foregroundColor(selectedPlayers.count == 2 ? AppColors.oliveGreen : AppColors.inkMedium)
+                        
+                        OnlineVotingGrid(
+                            players: firebase.alivePlayers.filter { $0.oderId != firebase.userId },
+                            selectedId: nil,
+                            onSelect: { player in
+                                if let index = selectedPlayers.firstIndex(where: { $0.oderId == player.oderId }) {
+                                    selectedPlayers.remove(at: index)
+                                } else if selectedPlayers.count < 2 {
+                                    selectedPlayers.append(player)
+                                }
+                            }
+                        )
+                        .padding(.horizontal)
+                        
+                        // Show selected players
+                        if !selectedPlayers.isEmpty {
+                            HStack {
+                                ForEach(selectedPlayers) { player in
+                                    Text(player.name)
+                                        .font(.custom("Georgia-Bold", size: 14))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Capsule().fill(AppColors.warmBrown))
+                                }
+                            }
+                        }
+                        
+                        // Confirm button
+                        if selectedPlayers.count == 2 {
+                            Button(action: {
+                                Task {
+                                    isSubmitting = true
+                                    try? await firebase.handleQuarantineSelection(
+                                        playerIds: selectedPlayers.map { $0.oderId }
+                                    )
+                                    isSubmitting = false
+                                }
+                            }) {
+                                Text("Bekräfta Karantän")
+                                    .font(.custom("Georgia-Bold", size: 16))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 32)
+                                    .padding(.vertical, 14)
+                                    .background(Capsule().fill(AppColors.warmBrown))
+                            }
+                            .disabled(isSubmitting)
+                        }
+                    }
+                    .padding(.vertical, AppSpacing.lg)
+                }
+            } else if isResolved {
+                // Show quarantined players
+                VStack(spacing: AppSpacing.lg) {
+                    Spacer()
+                    
+                    Image(systemName: "person.2.slash")
+                        .font(.system(size: 64))
+                        .foregroundColor(AppColors.warning)
+                    
+                    Text("I Karantän")
+                        .font(.custom("Georgia-Bold", size: 20))
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    // Show quarantined players
+                    HStack(spacing: AppSpacing.md) {
+                        ForEach(firebase.currentLobby?.quarantinedPlayerIds ?? [], id: \.self) { playerId in
+                            if let player = firebase.players.first(where: { $0.oderId == playerId }) {
+                                VStack {
+                                    if let avatar = player.avatar {
+                                        Image(avatar.imageName)
+                                            .resizable()
+                                            .scaledToFill()
+                                            .frame(width: 60, height: 75)
+                                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                                            .saturation(0.5)
+                                    }
+                                    Text(player.name)
+                                        .font(.custom("Georgia", size: 14))
+                                        .foregroundColor(AppColors.inkMedium)
+                                }
+                            }
+                        }
+                    }
+                    
+                    Text("Dessa spelare får inte prata eller rösta denna runda")
+                        .font(.custom("Georgia-Italic", size: 13))
+                        .foregroundColor(AppColors.inkMedium)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    
+                    if firebase.isCurrentRoller || firebase.isHost {
+                        continueButton()
+                    } else {
+                        Text("Väntar...")
+                            .font(.custom("Georgia-Italic", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                    }
+                    
+                    Spacer()
+                }
+            } else {
+                waitingView(message: "väntar på karantänval...")
+            }
+        }
+    }
+}
+
+// MARK: - Blackout Event View (9-10)
+
+struct OnlineBlackoutEventView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    
+    var body: some View {
+        VStack(spacing: AppSpacing.xl) {
+            Spacer()
+            
+            Image(systemName: "moon.stars.fill")
+                .font(.system(size: 80))
+                .foregroundColor(AppColors.inkDark)
+            
+            VStack(spacing: 8) {
+                Text("Midnatt")
+                    .font(.custom("Georgia-Bold", size: 32))
+                    .foregroundColor(AppColors.inkDark)
+                
+                Text("Tärningarna visade \(firebase.currentLobby?.diceResult ?? 0)")
+                    .font(.custom("Georgia", size: 14))
+                    .foregroundColor(AppColors.inkMedium)
+            }
+            
+            OrnamentalDivider()
+            
+            Text("Ett mystiskt mörker faller över byn!\nIngen botning sker denna runda.")
+                .font(.custom("Georgia", size: 16))
+                .foregroundColor(AppColors.inkMedium)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, AppSpacing.xl)
+            
+            if firebase.isCurrentRoller || firebase.isHost {
+                continueButton()
+                    .padding(.top, AppSpacing.xl)
+            } else {
+                Text("Väntar...")
+                    .font(.custom("Georgia-Italic", size: 14))
+                    .foregroundColor(AppColors.inkMedium)
+                    .padding(.top, AppSpacing.xl)
+            }
+            
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Epidemic Event View (11-12)
+
+struct OnlineEpidemicEventView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    
+    var amIVictim: Bool {
+        firebase.currentLobby?.epidemicVictimId == firebase.userId
+    }
+    
+    var body: some View {
+        VStack(spacing: AppSpacing.xl) {
+            Spacer()
+            
+            Image(systemName: "allergens")
+                .font(.system(size: 80))
+                .foregroundColor(AppColors.error)
+            
+            VStack(spacing: 8) {
+                Text("Epidemi!")
+                    .font(.custom("Georgia-Bold", size: 32))
+                    .foregroundColor(AppColors.error)
+                
+                Text("Tärningarna visade \(firebase.currentLobby?.diceResult ?? 0)")
+                    .font(.custom("Georgia", size: 14))
+                    .foregroundColor(AppColors.inkMedium)
+            }
+            
+            OrnamentalDivider()
+            
+            if amIVictim {
+                // Only victim sees this
+                Text("Du har blivit smittad av pesten!")
+                    .font(.custom("Georgia-Bold", size: 18))
+                    .foregroundColor(AppColors.error)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, AppSpacing.xl)
+                
+                Text("Ingen annan vet om detta. Hjälp de friska att hitta Råttmannen!")
+                    .font(.custom("Georgia-Italic", size: 14))
+                    .foregroundColor(AppColors.inkMedium)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, AppSpacing.xl)
+            } else {
+                Text("Pesten muterar och sprids i det tysta.\nNågon i byn har smittats...")
+                    .font(.custom("Georgia", size: 16))
+                    .foregroundColor(AppColors.inkMedium)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, AppSpacing.xl)
+            }
+            
+            if firebase.isCurrentRoller || firebase.isHost {
+                continueButton()
+                    .padding(.top, AppSpacing.xl)
+            } else {
+                Text("Väntar...")
+                    .font(.custom("Georgia-Italic", size: 14))
+                    .foregroundColor(AppColors.inkMedium)
+                    .padding(.top, AppSpacing.xl)
+            }
+            
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Blackout Skip View (for cure phase)
+
+struct OnlineBlackoutSkipView: View {
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    @State private var hasProceeded = false
+    
+    var body: some View {
+        VStack(spacing: AppSpacing.xl) {
+            Spacer()
+            
+            Image(systemName: "moon.zzz.fill")
+                .font(.system(size: 64))
+                .foregroundColor(AppColors.inkMedium.opacity(0.5))
+            
+            Text("Ingen Botning")
+                .font(.custom("Georgia-Bold", size: 24))
+                .foregroundColor(AppColors.inkDark)
+            
+            Text("På grund av mörkret hoppas botfasen över")
+                .font(.custom("Georgia-Italic", size: 14))
+                .foregroundColor(AppColors.inkMedium)
+            
+            // Auto-proceed after delay
+            ProgressView()
+                .tint(AppColors.warmBrown)
+                .padding(.top, AppSpacing.lg)
+            
+            Spacer()
+        }
+        .onAppear {
+            // Auto-proceed to voting after 2 seconds
+            guard !hasProceeded else { return }
+            hasProceeded = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                if firebase.isHost {
+                    Task {
+                        try? await firebase.skipToVotingPhase()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Dice View Helpers
+
+private func diceEventHeader(icon: String, title: String, subtitle: String) -> some View {
+    VStack(spacing: 8) {
+        Image(systemName: icon)
+            .font(.system(size: 48))
+            .foregroundColor(AppColors.warmBrown)
+        
+        OrnamentalDivider()
+        
+        Text(title)
+            .font(.custom("Georgia-Bold", size: 24))
+            .foregroundColor(AppColors.inkDark)
+        
+        Text(subtitle)
+            .font(.custom("Georgia", size: 14))
+            .foregroundColor(AppColors.inkMedium)
+        
+        OrnamentalDivider()
+    }
+    .padding(.top, AppSpacing.lg)
+}
+
+private func waitingView(message: String) -> some View {
+    VStack(spacing: AppSpacing.lg) {
+        Spacer()
+        
+        ProgressView()
+            .scaleEffect(1.2)
+            .tint(AppColors.warmBrown)
+        
+        Text(message.capitalized)
+            .font(.custom("Georgia", size: 16))
+            .foregroundColor(AppColors.inkMedium)
+        
+        Spacer()
+    }
+}
+
+private func continueButton() -> some View {
+    Button(action: {
+        Task {
+            try? await FirebaseMultiplayerManager.shared.proceedFromDiceEvent()
+        }
+    }) {
+        Text("Fortsätt")
+            .font(.custom("Georgia-Bold", size: 16))
+            .foregroundColor(.white)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 14)
+            .background(Capsule().fill(AppColors.warmBrown))
+    }
+}
+
+// MARK: - Online Game Over View
+
+struct OnlineGameOverView: View {
+    let onPlayAgain: () -> Void
+    let onExit: () -> Void
+    
+    @ObservedObject private var firebase = FirebaseMultiplayerManager.shared
+    
+    var friskaWin: Bool {
+        firebase.currentLobby?.gameResult == "friskaWin"
+    }
+    
+    var body: some View {
+        ZStack {
+            // Background
+            (friskaWin ? AppColors.parchment : Color(hex: "1a1510"))
+                .ignoresSafeArea()
+            
+            if friskaWin {
+                Image("egg-shell")
+                    .resizable(resizingMode: .tile)
+                    .ignoresSafeArea()
+            }
+            
+            VStack(spacing: AppSpacing.xl) {
+                Spacer()
+                
+                // Result icon
+                Image(systemName: friskaWin ? "sun.max.fill" : "moon.stars.fill")
+                    .font(.system(size: 80))
+                    .foregroundColor(friskaWin ? AppColors.warning : AppColors.parchment.opacity(0.6))
+                
+                // Result title
+                Text(friskaWin ? "De Friska Vann!" : "Råttmannen Segrade!")
+                    .font(.custom("Georgia-Bold", size: 28))
+                    .foregroundColor(friskaWin ? AppColors.inkDark : AppColors.parchment)
+                    .multilineTextAlignment(.center)
+                
+                OrnamentalDivider()
+                    .colorMultiply(friskaWin ? AppColors.warmBrown : AppColors.parchment)
+                
+                // Description
+                Text(friskaWin 
+                     ? "Råttmannen har förvisats och byn är säker igen."
+                     : "Alla i byn har smittats. Mörkret har segrat.")
+                    .font(.custom("Georgia", size: 16))
+                    .foregroundColor(friskaWin ? AppColors.inkMedium : AppColors.parchment.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, AppSpacing.xl)
+                
+                // Stats
+                VStack(spacing: 8) {
+                    Text("Rundor spelade: \(firebase.currentLobby?.round ?? 0)")
+                        .font(.custom("Georgia", size: 14))
+                        .foregroundColor(friskaWin ? AppColors.inkMedium : AppColors.parchment.opacity(0.6))
+                    
+                    Text("Spelare: \(firebase.players.count)")
+                        .font(.custom("Georgia", size: 14))
+                        .foregroundColor(friskaWin ? AppColors.inkMedium : AppColors.parchment.opacity(0.6))
+                }
+                .padding(.top, AppSpacing.md)
+                
+                Spacer()
+                
+                // Buttons
+                VStack(spacing: AppSpacing.md) {
+                    Button(action: onExit) {
+                        Text("Tillbaka till Meny")
+                            .font(.custom("Georgia-Bold", size: 16))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 32)
+                            .padding(.vertical, 14)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                Capsule()
+                                    .fill(AppColors.warmBrown)
+                            )
+                    }
+                }
+                .padding(.horizontal, AppSpacing.xl)
+                .padding(.bottom, AppSpacing.xxl)
+            }
+        }
+    }
+}
+
+// MARK: - Online Voting Components
+
+/// Voting grid for online players
+struct OnlineVotingGrid: View {
+    let players: [OnlinePlayer]
+    let selectedId: String?
+    let onSelect: (OnlinePlayer) -> Void
+    
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+    
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 12) {
+            ForEach(players) { player in
+                OnlineVotingCard(
+                    player: player,
+                    isSelected: player.oderId == selectedId,
+                    onTap: { onSelect(player) }
+                )
+            }
+        }
+    }
+}
+
+/// Portrait-style player card for online voting
+struct OnlineVotingCard: View {
+    let player: OnlinePlayer
+    let isSelected: Bool
+    let voteCount: Int?
+    let onTap: () -> Void
+    
+    @State private var isPressed = false
+    
+    init(
+        player: OnlinePlayer,
+        isSelected: Bool = false,
+        voteCount: Int? = nil,
+        onTap: @escaping () -> Void
+    ) {
+        self.player = player
+        self.isSelected = isSelected
+        self.voteCount = voteCount
+        self.onTap = onTap
+    }
+    
+    private var cardWidth: CGFloat { 160 }
+    private var cardHeight: CGFloat { cardWidth * (1.0 / CharacterAvatar.cardAspectRatio) }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+                // Character portrait
+                if let avatar = player.avatar {
+                    Image(avatar.imageName)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: cardWidth, height: cardHeight)
+                        .clipped()
+                }
+                
+                // Vote count badge
+                if let count = voteCount, count > 0 {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text("\(count)")
+                                .font(.custom("Georgia-Bold", size: 14))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule()
+                                        .fill(AppColors.oliveGreen)
+                                        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                                )
+                                .padding(8)
+                        }
+                        Spacer()
+                    }
+                }
+                
+                // Name bar
+                VStack(spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(player.name)
+                            .font(.custom("Georgia-Bold", size: 14))
+                            .foregroundColor(.white)
+                        if player.isHost {
+                            Image(systemName: "crown.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(AppColors.warning)
+                        }
+                    }
+                    
+                    if isSelected {
+                        Text("Din röst")
+                            .font(.custom("Georgia-Italic", size: 11))
+                            .foregroundColor(.white.opacity(0.85))
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, isSelected ? 10 : 8)
+                .background(
+                    LinearGradient(
+                        colors: [.black.opacity(0), .black.opacity(isSelected ? 0.8 : 0.65)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+            .frame(width: cardWidth, height: cardHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(
+                        isSelected ? AppColors.warmBrown.opacity(0.6) : Color.clear,
+                        lineWidth: 2
+                    )
+            )
+            .shadow(
+                color: isSelected ? AppColors.warmBrown.opacity(0.3) : .clear,
+                radius: 8,
+                y: 0
+            )
+        }
+        .scaleEffect(isPressed ? 0.97 : 1.0)
+        .animation(.easeOut(duration: 0.15), value: isPressed)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            let impact = UIImpactFeedbackGenerator(style: .medium)
+            impact.impactOccurred()
+            onTap()
+        }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
+    }
+}
+
+/// Action confirmation overlay for online mode
+struct OnlineActionConfirmation: View {
+    let title: String
+    let subtitle: String
+    let player: OnlinePlayer
+    let iconName: String?
+    let confirmText: String
+    let isSubmitting: Bool
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+    
+    var body: some View {
+        ZStack {
+            // Backdrop
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { onCancel() }
+            
+            // Modal
+            VStack(spacing: AppSpacing.lg) {
+                // Close button
+                HStack {
+                    Spacer()
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(AppColors.inkMedium)
+                            .padding(12)
+                            .background(Circle().fill(AppColors.inkDark.opacity(0.1)))
+                    }
+                }
+                
+                // Icon
+                if let iconName = iconName {
+                    Image(iconName)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 60)
+                }
+                
+                // Player portrait
+                if let avatar = player.avatar {
+                    Image(avatar.imageName)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 100, height: 100)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(AppColors.warmBrown.opacity(0.3), lineWidth: 2))
+                }
+                
+                // Title
+                Text(title)
+                    .font(.custom("Georgia-Bold", size: 20))
+                    .foregroundColor(AppColors.inkDark)
+                    .multilineTextAlignment(.center)
+                
+                // Subtitle
+                Text(subtitle)
+                    .font(.custom("Georgia", size: 14))
+                    .foregroundColor(AppColors.inkMedium)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                // Buttons
+                HStack(spacing: AppSpacing.md) {
+                    Button(action: onCancel) {
+                        Text("Avbryt")
+                            .font(.custom("Georgia", size: 14))
+                            .foregroundColor(AppColors.inkMedium)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 12)
+                            .background(
+                                Capsule()
+                                    .stroke(AppColors.inkMedium.opacity(0.3), lineWidth: 1)
+                            )
+                    }
+                    
+                    Button(action: onConfirm) {
+                        HStack(spacing: 6) {
+                            if isSubmitting {
+                                ProgressView()
+                                    .tint(.white)
+                                    .scaleEffect(0.8)
+                            }
+                            Text(confirmText)
+                                .font(.custom("Georgia-Bold", size: 14))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(
+                            Capsule()
+                                .fill(AppColors.warmBrown)
+                        )
+                    }
+                    .disabled(isSubmitting)
+                }
+                .padding(.top, AppSpacing.sm)
+            }
+            .padding(AppSpacing.xl)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(AppColors.parchment)
+                    .shadow(color: .black.opacity(0.2), radius: 20, y: 10)
+            )
+            .padding(.horizontal, AppSpacing.lg)
+        }
     }
 }
 

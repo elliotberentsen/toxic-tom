@@ -198,11 +198,11 @@ struct PlayerRow: View {
     
     var body: some View {
         HStack(spacing: 16) {
-            // Avatar
+            // Avatar (show good variant)
             Image(player.avatar.imageName)
                 .resizable()
-                .aspectRatio(2/3, contentMode: .fill)
-                .frame(width: 50, height: 66)
+                .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fill)
+                .frame(width: 50, height: 74)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .shadow(color: Color.black.opacity(0.15), radius: 3, y: 2)
             
@@ -307,20 +307,40 @@ struct AddPlayerOverlay: View {
                 }
                 .padding(.horizontal, 24)
                 
-                // Avatar selection
+                // Avatar selection - 2 column grid with names
                 VStack(alignment: .leading, spacing: 12) {
                     Text("CHARACTER")
                         .font(.custom("Georgia", size: 11))
                         .tracking(2)
                         .foregroundColor(AppColors.inkLight)
                     
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
+                    let columns = [
+                        GridItem(.flexible(), spacing: 8),
+                        GridItem(.flexible(), spacing: 8)
+                    ]
+                    
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 12) {
                             ForEach(availableAvatars) { avatar in
-                                AvatarOption(
-                                    avatar: avatar,
-                                    isSelected: selectedAvatar == avatar
-                                )
+                                VStack(spacing: 4) {
+                                    Image(avatar.imageName)
+                                        .resizable()
+                                        .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fit)
+                                        .scaleEffect(selectedAvatar == avatar ? 1.05 : 1.0)
+                                        .opacity(selectedAvatar == avatar ? 1.0 : 0.85)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .stroke(selectedAvatar == avatar ? AppColors.burntOrange : Color.clear, lineWidth: 2)
+                                        )
+                                    
+                                    Text(avatar.displayName)
+                                        .font(.custom("Georgia", size: 11))
+                                        .foregroundColor(AppColors.inkLight)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.center)
+                                        .minimumScaleFactor(0.7)
+                                }
+                                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selectedAvatar?.id)
                                 .onTapGesture {
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                                         selectedAvatar = avatar
@@ -374,37 +394,6 @@ struct AddPlayerOverlay: View {
                 selectedAvatar = availableAvatars.first
             }
         }
-    }
-}
-
-// MARK: - Avatar Option
-
-struct AvatarOption: View {
-    let avatar: CharacterAvatar
-    let isSelected: Bool
-    
-    @State private var isPressed = false
-    
-    var body: some View {
-        Image(avatar.imageName)
-            .resizable()
-            .scaledToFit()
-            .frame(width: 80, height: 80)
-            // Zoom effect for selection
-            .scaleEffect(isSelected ? 1.1 : (isPressed ? 0.95 : 1.0))
-            .shadow(
-                color: Color.black.opacity(isSelected ? 0.25 : 0.1),
-                radius: isSelected ? 6 : 2,
-                y: isSelected ? 3 : 1
-            )
-            .opacity(isSelected ? 1.0 : 0.85)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
-            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in isPressed = true }
-                    .onEnded { _ in isPressed = false }
-            )
     }
 }
 
@@ -472,11 +461,11 @@ struct ReadyPlayerCard: View {
             }
         }) {
             VStack(spacing: 8) {
-                // Avatar
+                // Avatar (show good variant)
                 ZStack {
                     Image(player.avatar.imageName)
                         .resizable()
-                        .aspectRatio(2/3, contentMode: .fit)
+                        .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fit)
                         .opacity(player.isReady ? 0.5 : 1.0)
                     
                     if player.isReady {
@@ -557,10 +546,10 @@ struct PassDeviceView: View {
         VStack(spacing: 32) {
             Spacer()
             
-            // Player avatar
+            // Player avatar (show good variant)
             Image(player.avatar.imageName)
                 .resizable()
-                .aspectRatio(2/3, contentMode: .fit)
+                .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fit)
                 .frame(width: 120)
                 .shadow(color: Color.black.opacity(0.2), radius: 12, y: 6)
             

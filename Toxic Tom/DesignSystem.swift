@@ -298,7 +298,6 @@ struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(AppFonts.headingSmall())
-            .tracking(2)
             .foregroundColor(AppColors.textOnPrimary)
             .frame(maxWidth: .infinity)
             .frame(height: 52)
@@ -320,7 +319,6 @@ struct SecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(AppFonts.bodyMedium())
-            .tracking(1)
             .foregroundColor(AppColors.textOnPrimary)
             .frame(maxWidth: .infinity)
             .frame(height: 46)

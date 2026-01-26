@@ -26,6 +26,7 @@ enum AppView {
     case home
     case localGame         // Local hotseat game
     case onlineGame        // Online multiplayer game
+    case designMode        // Design mode for testing
     case characterSelect
     case rules
     case diceSimulator
@@ -85,6 +86,13 @@ struct ContentView: View {
                 })
             case .onlineGame:
                 OnlineGameView(onExit: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentView = .home
+                    }
+                })
+            case .designMode:
+                DesignModeGameView(onExit: {
+                    DesignModeManager.shared.reset()
                     withAnimation(.easeInOut(duration: 0.3)) {
                         currentView = .home
                     }
@@ -202,6 +210,21 @@ struct ContentView: View {
                             Text("Dice Simulator")
                                 .font(.custom("Georgia", size: 18))
                                 .foregroundColor(AppColors.inkDark.opacity(0.7))
+                        }
+                        
+                        Button(action: { 
+                            SoundManager.shared.playClick()
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                currentView = .designMode
+                            }
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "hammer.fill")
+                                    .font(.system(size: 12))
+                                Text("Design Mode")
+                                    .font(.custom("Georgia", size: 18))
+                            }
+                            .foregroundColor(.orange.opacity(0.8))
                         }
                     }
                 }

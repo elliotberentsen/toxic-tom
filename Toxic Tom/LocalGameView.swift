@@ -177,11 +177,9 @@ struct PlayerSetupView: View {
     @ObservedObject var gameManager = GameManager.shared
     @State private var playerName: String = ""
     @State private var selectedAvatar: CharacterAvatar?
+    @State private var previewAvatar: CharacterAvatar?
     @State private var showNameError = false
     @FocusState private var isNameFocused: Bool
-    
-    // 2-column grid for character selection
-    // Grid columns created dynamically in the view
     
     var body: some View {
         VStack(spacing: 0) {
@@ -270,102 +268,90 @@ struct PlayerSetupView: View {
                     }
                     .padding(.horizontal, AppSpacing.xl)
                     
-                    // Character selection - 2 column grid with precise spacing
+                    // Character selection - 2 column grid with names
                     VStack(alignment: .leading, spacing: AppSpacing.sm) {
                         Text("Välj karaktär")
                             .font(AppFonts.label())
                             .foregroundColor(AppColors.inkMedium)
-                            .padding(.horizontal, 5)
+                            .padding(.horizontal, AppSpacing.lg)
                         
                         GeometryReader { geometry in
-                            let horizontalPadding: CGFloat = 16
-                            let spacing: CGFloat = 12
+                            let spacing: CGFloat = AppSpacing.md
+                            let horizontalPadding: CGFloat = AppSpacing.lg
                             let availableWidth = geometry.size.width - (horizontalPadding * 2)
-                            let itemWidth = (availableWidth - spacing) / 2
-                            let itemHeight = itemWidth * (1413.0 / 1143.0)
+                            let cardWidth = (availableWidth - spacing) / 2
+                            let cardHeight = cardWidth / CharacterAvatar.cardAspectRatio
                             
-                            let gridColumns = [
-                                GridItem(.fixed(itemWidth), spacing: spacing),
-                                GridItem(.fixed(itemWidth), spacing: spacing)
+                            let columns = [
+                                GridItem(.fixed(cardWidth), spacing: spacing),
+                                GridItem(.fixed(cardWidth), spacing: spacing)
                             ]
                             
-                            LazyVGrid(columns: gridColumns, spacing: spacing) {
+                            LazyVGrid(columns: columns, spacing: AppSpacing.lg) {
                                 ForEach(gameManager.availableAvatars()) { avatar in
-                                    let isSelected = selectedAvatar?.id == avatar.id
-                                    let hasSelection = selectedAvatar != nil
-                                    
-                                    Image(avatar.imageName)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .frame(width: itemWidth, height: itemHeight)
-                                        .clipped()
-                                        .saturation(hasSelection && !isSelected ? 0.7 : 1.0)
-                                        .opacity(hasSelection && !isSelected ? 0.85 : 1.0)
-                                        .scaleEffect(isSelected ? 1.03 : 1.0)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            SoundManager.shared.playClick()
-                                            isNameFocused = false
-                                            withAnimation(.spring(response: 0.3)) {
-                                                selectedAvatar = avatar
-                                            }
+                                    VStack(spacing: AppSpacing.xs) {
+                                        Image(avatar.imageName)
+                                            .resizable()
+                                            .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fit)
+                                            .frame(width: cardWidth, height: cardHeight)
+                                            .contentShape(Rectangle())
+                                        
+                                        Text(avatar.displayName)
+                                            .font(AppFonts.bodySmall())
+                                            .foregroundColor(AppColors.inkMedium)
+                                            .lineLimit(2)
+                                            .multilineTextAlignment(.center)
+                                            .minimumScaleFactor(0.7)
+                                    }
+                                    .onTapGesture {
+                                        SoundManager.shared.playClick()
+                                        isNameFocused = false
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                            previewAvatar = avatar
                                         }
+                                    }
                                 }
                             }
                             .padding(.horizontal, horizontalPadding)
                         }
-                        .frame(height: 500) // Give GeometryReader a height context
+                        .frame(height: 1600) // Height for 9 rows of cards with names
                     }
                     .padding(.top, AppSpacing.lg)
                     .padding(.bottom, AppSpacing.md)
                 }
             }
-            
-            // Fixed bottom button
-            VStack(spacing: 0) {
-                Divider()
-                    .background(AppColors.warmBrown.opacity(0.2))
-                
-                Button(action: {
-                    SoundManager.shared.playClick()
-                    
-                    let trimmedName = playerName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmedName.isEmpty else {
-                        showNameError = true
-                        return
+        }
+        .overlay {
+            // Full-screen character confirmation overlay
+            if let avatar = previewAvatar {
+                LocalCharacterConfirmationOverlay(
+                    avatar: avatar,
+                    playerName: playerName,
+                    confirmButtonText: playerNumber == gameManager.selectedPlayerCount ? "Klar" : "Nästa spelare",
+                    showNameError: $showNameError,
+                    onConfirm: {
+                        let trimmedName = playerName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmedName.isEmpty else {
+                            showNameError = true
+                            return
+                        }
+                        selectedAvatar = avatar
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            gameManager.addPlayer(name: trimmedName, avatar: avatar)
+                        }
+                    },
+                    onCancel: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            previewAvatar = nil
+                        }
                     }
-                    
-                    guard let avatar = selectedAvatar else { return }
-                    
-                    withAnimation(.easeInOut(duration: 0.4)) {
-                        gameManager.addPlayer(name: trimmedName, avatar: avatar)
-                    }
-                }) {
-                    HStack(spacing: AppSpacing.sm) {
-                        Text(playerNumber == gameManager.selectedPlayerCount ? "Klar" : "Nästa spelare")
-                            .font(AppFonts.headingSmall())
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 16, weight: .bold))
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, AppSpacing.md)
-                    .background(
-                        RoundedRectangle(cornerRadius: AppRadius.md)
-                            .fill(selectedAvatar != nil ? AppColors.warmBrown : AppColors.inkMedium.opacity(0.3))
-                            .shadow(color: AppColors.inkDark.opacity(0.15), radius: 4, y: 2)
-                    )
-                }
-                .disabled(selectedAvatar == nil)
-                .padding(.horizontal, AppSpacing.xl)
-                .padding(.vertical, AppSpacing.md)
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
-            .background(AppColors.parchment.opacity(0.95))
         }
         .onChange(of: playerName) { _ in
             if showNameError { showNameError = false }
         }
-        .scrollDismissesKeyboard(.interactively)
     }
 }
 
@@ -379,17 +365,175 @@ struct AvatarSelectionCard: View {
     var body: some View {
         Image(avatar.imageName)
             .resizable()
-            .aspectRatio(1326/1990, contentMode: .fit)
+            .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fit)
             .scaleEffect(isSelected ? 1.03 : 1.0)
             .opacity(isSelected ? 1.0 : 0.9)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isSelected)
-            .padding(2.5) // Half of 5px on each side = 5px total gap between cards
+            .padding(2.5)
             .contentShape(Rectangle())
             .onTapGesture {
                 let impact = UIImpactFeedbackGenerator(style: .medium)
                 impact.impactOccurred()
                 onTap()
             }
+    }
+}
+
+// MARK: - Local Character Confirmation View (Full Screen)
+
+struct LocalCharacterConfirmationOverlay: View {
+    let avatar: CharacterAvatar
+    let playerName: String
+    let confirmButtonText: String
+    @Binding var showNameError: Bool
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+    
+    @State private var imageScale: CGFloat = 0.85
+    @State private var imageOpacity: Double = 0
+    @State private var contentOpacity: Double = 0
+    
+    var body: some View {
+        ZStack {
+            // Full screen parchment background
+            AppColors.parchment
+                .ignoresSafeArea(.all)
+            
+            // Subtle texture
+            Image("egg-shell")
+                .resizable(resizingMode: .tile)
+                .opacity(0.4)
+                .ignoresSafeArea(.all)
+            
+            VStack(spacing: 0) {
+                // Close button at top right
+                HStack {
+                    Spacer()
+                    
+                    Button(action: {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            imageScale = 0.85
+                            imageOpacity = 0
+                            contentOpacity = 0
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            onCancel()
+                        }
+                    }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(AppColors.inkMedium)
+                            .frame(width: 36, height: 36)
+                            .background(
+                                Circle()
+                                    .fill(AppColors.warmBrown.opacity(0.1))
+                            )
+                    }
+                }
+                .padding(.horizontal, AppSpacing.lg)
+                .padding(.top, AppSpacing.xl)
+                .opacity(contentOpacity)
+                
+                Spacer()
+                
+                // Character image - centered and prominent
+                Image(avatar.imageName)
+                    .resizable()
+                    .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fit)
+                    .frame(maxWidth: 280)
+                    .shadow(color: .black.opacity(0.15), radius: 20, y: 10)
+                    .scaleEffect(imageScale)
+                    .opacity(imageOpacity)
+                
+                Spacer()
+                    .frame(height: AppSpacing.xxl)
+                
+                // Character name
+                Text(avatar.displayName)
+                    .font(AppFonts.displayLarge())
+                    .foregroundColor(AppColors.inkDark)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, AppSpacing.xl)
+                    .opacity(contentOpacity)
+                
+                Spacer()
+                    .frame(height: AppSpacing.md)
+                
+                OrnamentDivider(width: 100, color: AppColors.warmBrown.opacity(0.4))
+                    .opacity(contentOpacity)
+                
+                // Name validation error
+                if showNameError {
+                    Text("Ange ett namn först")
+                        .font(AppFonts.bodyMedium())
+                        .foregroundColor(AppColors.coralRed)
+                        .padding(.top, AppSpacing.lg)
+                        .opacity(contentOpacity)
+                }
+                
+                Spacer()
+                
+                // Confirm button - medieval panel style
+                Button(action: onConfirm) {
+                    ZStack {
+                        // Panel background
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color(hex: "f5edd8"))
+                            .shadow(color: Color.black.opacity(0.12), radius: 4, y: 3)
+                        
+                        // Double border
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(AppColors.warmBrown.opacity(0.6), lineWidth: 1.5)
+                        
+                        // Inner border
+                        RoundedRectangle(cornerRadius: 2)
+                            .stroke(AppColors.warmBrown.opacity(0.2), lineWidth: 0.5)
+                            .padding(4)
+                        
+                        // Corner ornaments
+                        VStack {
+                            HStack {
+                                CornerOrnamentSmall()
+                                Spacer()
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(90))
+                            }
+                            Spacer()
+                            HStack {
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(-90))
+                                Spacer()
+                                CornerOrnamentSmall()
+                                    .rotationEffect(.degrees(180))
+                            }
+                        }
+                        .padding(6)
+                        
+                        // Content
+                        HStack(spacing: AppSpacing.sm) {
+                            Text(confirmButtonText)
+                                .font(.custom("Georgia-Bold", size: 18))
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundColor(AppColors.inkDark)
+                    }
+                    .frame(height: 56)
+                }
+                .padding(.horizontal, AppSpacing.xl)
+                .padding(.bottom, AppSpacing.xxl)
+                .opacity(contentOpacity)
+            }
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                imageScale = 1.0
+                imageOpacity = 1.0
+            }
+            withAnimation(.easeOut(duration: 0.4).delay(0.1)) {
+                contentOpacity = 1.0
+            }
+        }
     }
 }
 
@@ -484,11 +628,11 @@ struct PlayerReadyCard: View {
     
     var body: some View {
         HStack(spacing: AppSpacing.md) {
-            // Avatar
+            // Avatar (show good variant)
             Image(player.avatar.imageName)
                 .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 50, height: 60)
+                .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fill)
+                .frame(width: 50, height: 74)
                 .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm))
             
             // Player info
@@ -632,37 +776,40 @@ struct RoleFlipCard: View {
     
     var body: some View {
         ZStack {
-            // Card stack effect (back cards)
-            ForEach(0..<2) { i in
-                RoundedRectangle(cornerRadius: AppRadius.lg)
-                    .fill(Color(hex: "2C1810"))
-                    .frame(width: cardWidth - CGFloat(i * 6), height: cardHeight - CGFloat(i * 6))
-                    .offset(y: CGFloat((2 - i) * 4))
-                    .opacity(0.5 + Double(i) * 0.2)
+            // Card deck underneath - using actual card images like the demo
+            ForEach(0..<3, id: \.self) { index in
+                Image("card-back")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: cardWidth, height: cardHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
+                    .offset(y: CGFloat(3 - index) * 3)
+                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
             }
             
-            // Main card
+            // Main flippable card
             ZStack {
                 // Back of card
                 CardBackContent()
                     .frame(width: cardWidth, height: cardHeight)
-                    .opacity(isFlipped ? 0 : 1)
                     .rotation3DEffect(
-                        .degrees(isFlipped ? -180 : 0),
+                        .degrees(isFlipped ? 180 : 0),
                         axis: (x: 0, y: 1, z: 0),
                         perspective: 0.5
                     )
+                    .opacity(isFlipped ? 0 : 1)
                 
                 // Front of card
-                RoleCardContent(role: role)
-                    .frame(width: cardWidth, height: cardHeight)
-                    .opacity(isFlipped ? 1 : 0)
+                RoleCardContent(role: role, width: cardWidth, height: cardHeight)
                     .rotation3DEffect(
-                        .degrees(isFlipped ? 0 : 180),
+                        .degrees(isFlipped ? 0 : -180),
                         axis: (x: 0, y: 1, z: 0),
                         perspective: 0.5
                     )
+                    .opacity(isFlipped ? 1 : 0)
             }
+            .offset(y: -6) // Slight offset so deck peeks at bottom
+            .shadow(color: .black.opacity(isFlipped ? 0.2 : 0.12), radius: isFlipped ? 8 : 4, y: isFlipped ? 6 : 3)
             .onTapGesture {
                 if !isFlipped {
                     SoundManager.shared.playCardFlip()
@@ -690,57 +837,83 @@ struct CardBackContent: View {
 
 struct RoleCardContent: View {
     let role: PlayerRole
-    
-    var roleColor: Color {
-        switch role {
-        case .frisk: return AppColors.oliveGreen
-        case .smittobarare: return AppColors.coralRed
-        case .infekterad: return AppColors.coralRed.opacity(0.7)
-        }
-    }
+    var width: CGFloat = 260
+    var height: CGFloat = 390
     
     var body: some View {
         ZStack {
-            // Card frame
-            Image("card-frame")
+            // Card front background (parchment) - matching DemoCardFront
+            Image("card-front")
                 .resizable()
-                .aspectRatio(contentMode: .fill)
-                .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
+                .scaledToFill()
+                .frame(width: width, height: height)
+                .clipped()
             
-            // Role content
-            VStack(spacing: AppSpacing.md) {
+            // Content inside card
+            VStack(spacing: 0) {
                 Spacer()
+                    .frame(height: height * 0.08)
                 
-                // Role icon
+                // Role icon - prominent size as main focus
                 Image(role.cardImage)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 80, height: 80)
+                    .aspectRatio(1, contentMode: .fit)
+                    .frame(width: width * 0.65)
+                
+                Spacer()
+                    .frame(height: height * 0.03)
                 
                 // Role name
                 Text(role.displayName)
-                    .font(.system(size: 24, weight: .bold, design: .serif))
-                    .foregroundColor(roleColor)
-                
-                // Divider
-                OrnamentDivider(width: 100, color: roleColor.opacity(0.5))
-                
-                // Description
-                Text(role.description)
-                    .font(AppFonts.bodyMedium())
+                    .font(.custom("Georgia-Bold", size: width * 0.09))
                     .foregroundColor(AppColors.inkDark)
-                    .multilineTextAlignment(.center)
-                
-                // Objective
-                Text(role.objective)
-                    .font(AppFonts.caption())
-                    .foregroundColor(AppColors.inkMedium)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, AppSpacing.md)
                 
                 Spacer()
+                    .frame(height: height * 0.02)
+                
+                // Divider
+                Rectangle()
+                    .fill(AppColors.warmBrown.opacity(0.3))
+                    .frame(width: width * 0.4, height: 1)
+                
+                Spacer()
+                    .frame(height: height * 0.02)
+                
+                // Role description text INSIDE the card
+                VStack(spacing: 4) {
+                    Text(roleTitle(for: role))
+                        .font(.custom("Georgia-Italic", size: width * 0.055))
+                        .foregroundColor(AppColors.inkDark)
+                    
+                    Text(roleSubtitle(for: role))
+                        .font(.custom("Georgia", size: width * 0.045))
+                        .foregroundColor(AppColors.inkMedium)
+                }
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, width * 0.1)
+                
+                Spacer()
+                    .frame(height: height * 0.06)
             }
-            .padding(AppSpacing.lg)
+            .frame(width: width, height: height)
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
+    }
+    
+    private func roleTitle(for role: PlayerRole) -> String {
+        switch role {
+        case .frisk: return "Du är frisk."
+        case .smittobarare: return "Du är smittobäraren."
+        case .infekterad: return "Du är infekterad."
+        }
+    }
+    
+    private func roleSubtitle(for role: PlayerRole) -> String {
+        switch role {
+        case .frisk: return "Hitta smittobäraren."
+        case .smittobarare: return "Smitta dem alla."
+        case .infekterad: return "Sök ett botemedel."
         }
     }
 }
@@ -771,8 +944,8 @@ struct GamePlayingView: View {
                     HStack {
                         Image(player.avatar.imageName)
                             .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 40, height: 50)
+                            .aspectRatio(CharacterAvatar.cardAspectRatio, contentMode: .fill)
+                            .frame(width: 40, height: 59)
                             .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm))
                         
                         Text(player.name)

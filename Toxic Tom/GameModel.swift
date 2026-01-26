@@ -15,6 +15,48 @@ enum GameMode {
     case online     // Each player on own device (future)
 }
 
+// MARK: - Public Role (Elected by players)
+
+enum PublicRole: String, CaseIterable {
+    case lakare = "lakare"      // Doctor - can cure one player per day
+    case vaktare = "vaktare"    // Guard - can protect one player per night
+    
+    var displayName: String {
+        switch self {
+        case .lakare: return "LÄKARE"
+        case .vaktare: return "VÄKTARE"
+        }
+    }
+    
+    var iconName: String {
+        switch self {
+        case .lakare: return "doctor"
+        case .vaktare: return "guard"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .lakare: return "Kan ge motgift till en spelare varje dag"
+        case .vaktare: return "Kan skydda en spelare varje natt"
+        }
+    }
+    
+    var electionTitle: String {
+        switch self {
+        case .lakare: return "Välj Läkare"
+        case .vaktare: return "Välj Väktare"
+        }
+    }
+    
+    var electionSubtitle: String {
+        switch self {
+        case .lakare: return "Vem ska ha makten att bota?"
+        case .vaktare: return "Vem ska vakta byn om natten?"
+        }
+    }
+}
+
 // MARK: - Player Role
 
 enum PlayerRole: String, CaseIterable {
@@ -55,33 +97,41 @@ enum PlayerRole: String, CaseIterable {
 
 struct CharacterAvatar: Identifiable, Equatable, Hashable {
     let id: String
-    let name: String
     let imageName: String
+    let displayName: String
     
+    /// Card aspect ratio (780 × 1150)
+    static let cardAspectRatio: CGFloat = 780.0 / 1150.0
+    
+    /// All 18 avatars arranged as pairs (good on left, evil on right) for 2-column grid display
     static let allAvatars: [CharacterAvatar] = [
-        // Royalty
-        CharacterAvatar(id: "king", name: "Kungen", imageName: "king"),
-        CharacterAvatar(id: "queen", name: "Drottningen", imageName: "queen"),
-        CharacterAvatar(id: "noble-man", name: "Adelsmannen", imageName: "noble-man"),
-        
-        // Clergy & Officials
-        CharacterAvatar(id: "bishop", name: "Biskopen", imageName: "bishop"),
-        CharacterAvatar(id: "judge", name: "Domaren", imageName: "judge"),
-        CharacterAvatar(id: "knight", name: "Riddaren", imageName: "knight"),
-        
-        // Working Folk
-        CharacterAvatar(id: "craftsman", name: "Hantverkaren", imageName: "craftsman"),
-        CharacterAvatar(id: "young-man", name: "Ynglingen", imageName: "young-man"),
-        
-        // Women
-        CharacterAvatar(id: "25-women", name: "Helena", imageName: "25-women"),
-        CharacterAvatar(id: "women-35", name: "Margareta", imageName: "women-35"),
-        CharacterAvatar(id: "women-70", name: "Birgitta", imageName: "women-70"),
-        CharacterAvatar(id: "women-monk", name: "Nunnan", imageName: "women-monk"),
-        CharacterAvatar(id: "women-musician", name: "Spelkvinnan", imageName: "women-musician"),
-        
-        // Youth
-        CharacterAvatar(id: "15-girl", name: "Flickan", imageName: "15-girl")
+        // Row 1: Wizard
+        CharacterAvatar(id: "good-wizard", imageName: "good-wizard", displayName: "Wizard"),
+        CharacterAvatar(id: "evil-wizard", imageName: "evil-wizard", displayName: "Dark Wizard"),
+        // Row 2: Princess
+        CharacterAvatar(id: "good-princess", imageName: "good-princess", displayName: "Princess"),
+        CharacterAvatar(id: "evil-princess", imageName: "evil-princess", displayName: "False Princess"),
+        // Row 3: Bar Keeper
+        CharacterAvatar(id: "good-bar-keeper", imageName: "good-bar-keeper", displayName: "Bar Keeper"),
+        CharacterAvatar(id: "evil-bar-keeper", imageName: "evil-bar-keeper", displayName: "Twisted Bar Keeper"),
+        // Row 4: Jester
+        CharacterAvatar(id: "good-jester", imageName: "good-jester", displayName: "Jester"),
+        CharacterAvatar(id: "evil-jester", imageName: "evil-jester", displayName: "Mischievous Jester"),
+        // Row 5: Goblin
+        CharacterAvatar(id: "good-goblin", imageName: "good-goblin", displayName: "Goblin"),
+        CharacterAvatar(id: "evil-goblin", imageName: "evil-goblin", displayName: "Ravenous Goblin"),
+        // Row 6: Judge
+        CharacterAvatar(id: "good-judge", imageName: "good-judge", displayName: "Judge"),
+        CharacterAvatar(id: "evil-judge", imageName: "evil-judge", displayName: "Corrupted Judge"),
+        // Row 7: Elf
+        CharacterAvatar(id: "good-elf", imageName: "good-elf", displayName: "Elf"),
+        CharacterAvatar(id: "evil-elf", imageName: "evil-elf", displayName: "Dark Elf"),
+        // Row 8: Relic Keeper
+        CharacterAvatar(id: "good-relic-guy", imageName: "good-relic-guy", displayName: "Relic Keeper"),
+        CharacterAvatar(id: "evil-relic-guy", imageName: "evil-relic-guy", displayName: "Unlawful Relic Keeper"),
+        // Row 9: Ogre
+        CharacterAvatar(id: "good-troll", imageName: "good-troll", displayName: "Ogre"),
+        CharacterAvatar(id: "evil-troll", imageName: "evil-troll", displayName: "Perverted Ogre")
     ]
 }
 
@@ -140,8 +190,8 @@ class GameManager: ObservableObject {
     @Published var selectedPlayerCount: Int = 4
     @Published var usedAvatars: Set<String> = []
     
-    // Minimum players to start
-    let minPlayers = 3
+    // Minimum players to start (2 for testing, should be 4+ in production)
+    let minPlayers = 2
     let maxPlayers = 8
     
     private init() {}
